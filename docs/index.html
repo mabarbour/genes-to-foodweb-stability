@@ -22,6 +22,8 @@
 <script src="site_libs/navigation-1.1/tabsets.js"></script>
 <link href="site_libs/highlightjs-9.12.0/textmate.css" rel="stylesheet" />
 <script src="site_libs/highlightjs-9.12.0/highlight.js"></script>
+<link href="site_libs/font-awesome-5.1.0/css/all.css" rel="stylesheet" />
+<link href="site_libs/font-awesome-5.1.0/css/v4-shims.css" rel="stylesheet" />
 
 <style type="text/css">code{white-space: pre;}</style>
 <style type="text/css">
@@ -282,7 +284,13 @@ $(document).ready(function () {
 </li>
       </ul>
       <ul class="nav navbar-nav navbar-right">
-        
+        <li>
+  <a href="https://github.com/mabarbour/genes-to-foodweb-stability">
+    <span class="fa fa-github"></span>
+     
+    Source code
+  </a>
+</li>
       </ul>
     </div><!--/.nav-collapse -->
   </div><!--/.container -->
@@ -306,7 +314,7 @@ div.section {
 
 <p>
 <button type="button" class="btn btn-default btn-workflowr btn-workflowr-report" data-toggle="collapse" data-target="#workflowr-report">
-<span class="glyphicon glyphicon-list" aria-hidden="true"></span> workflowr <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span>
+<span class="glyphicon glyphicon-list" aria-hidden="true"></span> workflowr <span class="glyphicon glyphicon-exclamation-sign text-danger" aria-hidden="true"></span>
 </button>
 </p>
 <div id="workflowr-report" class="collapse">
@@ -315,7 +323,7 @@ div.section {
 <a data-toggle="tab" href="#summary">Summary</a>
 </li>
 <li>
-<a data-toggle="tab" href="#checks"> Checks <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span> </a>
+<a data-toggle="tab" href="#checks"> Checks <span class="glyphicon glyphicon-exclamation-sign text-danger" aria-hidden="true"></span> </a>
 </li>
 <li>
 <a data-toggle="tab" href="#versions">Past versions</a>
@@ -324,10 +332,10 @@ div.section {
 <div class="tab-content">
 <div id="summary" class="tab-pane fade in active">
 <p>
-<strong>Last updated:</strong> 2020-02-05
+<strong>Last updated:</strong> 2020-06-23
 </p>
 <p>
-<strong>Checks:</strong> <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span> 2 <span class="glyphicon glyphicon-exclamation-sign text-danger" aria-hidden="true"></span> 0
+<strong>Checks:</strong> <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span> 1 <span class="glyphicon glyphicon-exclamation-sign text-danger" aria-hidden="true"></span> 1
 </p>
 <p>
 <strong>Knit directory:</strong> <code>genes-to-foodweb-stability/</code> <span class="glyphicon glyphicon-question-sign" aria-hidden="true" title="This is the local directory in which the code in this file was executed."> </span>
@@ -343,28 +351,92 @@ This reproducible <a href="http://rmarkdown.rstudio.com">R Markdown</a> analysis
 <div class="panel panel-default">
 <div class="panel-heading">
 <p class="panel-title">
-<a data-toggle="collapse" data-parent="#workflowr-checks" href="#strongRMarkdownfilestronguptodate"> <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span> <strong>R Markdown file:</strong> up-to-date </a>
+<a data-toggle="collapse" data-parent="#workflowr-checks" href="#strongRMarkdownfilestronguncommittedchanges"> <span class="glyphicon glyphicon-exclamation-sign text-danger" aria-hidden="true"></span> <strong>R Markdown file:</strong> uncommitted changes </a>
 </p>
 </div>
-<div id="strongRMarkdownfilestronguptodate" class="panel-collapse collapse">
+<div id="strongRMarkdownfilestronguncommittedchanges" class="panel-collapse collapse">
 <div class="panel-body">
-<p>Great! Since the R Markdown file has been committed to the Git repository, you know the exact version of the code that produced these results.</p>
+<p>The R Markdown file has staged changes. To know which version of the R Markdown file created these results, you’ll want to first commit it to the Git repo. If you’re still working on the analysis, you can ignore this warning. When you’re finished, you can run <code>wflow_publish</code> to commit the R Markdown file and build the HTML.</p>
 </div>
 </div>
 </div>
 <div class="panel panel-default">
 <div class="panel-heading">
 <p class="panel-title">
-<a data-toggle="collapse" data-parent="#workflowr-checks" href="#strongRepositoryversionstrong27ad8e2"> <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span> <strong>Repository version:</strong> 27ad8e2 </a>
+<a data-toggle="collapse" data-parent="#workflowr-checks" href="#strongRepositoryversionstrongahrefhttpsgithubcommabarbourgenestofoodwebstabilitytree5c4f4ab643a3cabd24b2cce9ee629aa51fdbf988targetblank5c4f4aba"> <span class="glyphicon glyphicon-ok text-success" aria-hidden="true"></span> <strong>Repository version:</strong> <a href="https://github.com/mabarbour/genes-to-foodweb-stability/tree/5c4f4ab643a3cabd24b2cce9ee629aa51fdbf988" target="_blank">5c4f4ab</a> </a>
 </p>
 </div>
-<div id="strongRepositoryversionstrong27ad8e2" class="panel-collapse collapse">
+<div id="strongRepositoryversionstrongahrefhttpsgithubcommabarbourgenestofoodwebstabilitytree5c4f4ab643a3cabd24b2cce9ee629aa51fdbf988targetblank5c4f4aba" class="panel-collapse collapse">
 <div class="panel-body">
 <p>
 Great! You are using Git for version control. Tracking code development and connecting the code version to the results is critical for reproducibility. The version displayed above was the version of the Git repository at the time these results were generated. <br><br> Note that you need to be careful to ensure that all relevant files for the analysis have been committed to Git prior to generating the results (you can use <code>wflow_publish</code> or <code>wflow_git_commit</code>). workflowr only checks the R Markdown file, but you know if there are other scripts or data files that it depends on. Below is the status of the Git repository when the results were generated:
 </p>
 <pre><code>
-working directory clean
+Ignored files:
+    Ignored:    .Rhistory
+    Ignored:    .Rproj.user/
+    Ignored:    code/.Rhistory
+
+Unstaged changes:
+    Modified:   analysis/about.Rmd
+    Modified:   analysis/license.Rmd
+    Deleted:    figures/conceptual.key
+    Deleted:    figures/conceptual.pdf
+    Deleted:    figures/initial-foodweb-structural-stability-v5-gimp.png
+    Deleted:    figures/initial-foodweb-structural-stability-v5-gimp.xcf
+    Deleted:    figures/rich-geno-critical-transitions-images-v2.key
+    Deleted:    figures/rich-geno-critical-transitions-images-v2.pdf
+    Deleted:    figures/rich-state-transitions-images-v3.key
+    Deleted:    figures/rich-state-transitions-images-v3.pdf
+    Deleted:    figures/rich-structural-stability-images-v2.key
+    Deleted:    figures/rich-structural-stability-images-v2.pdf
+
+Staged changes:
+    Modified:   README.md
+    New:        analysis/critical-transitions.Rmd
+    Modified:   analysis/index.Rmd
+    Modified:   analysis/license.Rmd
+    New:        analysis/plant-growth-no-insects.Rmd
+    New:        analysis/structural-stability.Rmd
+    Modified:   code/README.md
+    New:        code/glm-ftest.R
+    New:        code/plot-feasibility-domain.R
+    New:        code/prep-time-series.R
+    New:        code/simulate-community-dynamics.R
+    New:        code/temperature-structural-stability-fig.R
+    New:        data/ExperimentPlantBiomass.csv
+    New:        data/PreExperimentNoInsectsPlantBiomass.csv
+    Modified:   data/README.md
+    New:        data/arabidopsis_clean_df.csv
+    New:        figures/conceptual.key
+    New:        figures/conceptual.pdf
+    New:        figures/initial-foodweb-structural-stability-v2.png
+    New:        figures/initial-foodweb-structural-stability-v5-gimp.png
+    New:        figures/initial-foodweb-structural-stability-v5-gimp.xcf
+    New:        figures/rich-geno-critical-transition-v4.pdf
+    New:        figures/rich-geno-critical-transitions-images-v2.key
+    New:        figures/rich-geno-critical-transitions-images-v2.pdf
+    New:        figures/rich-state-transitions-images-v3.key
+    New:        figures/rich-state-transitions-images-v3.pdf
+    New:        figures/rich-structural-stability-R-v2.pdf
+    New:        figures/rich-structural-stability-images-v2.key
+    New:        figures/rich-structural-stability-images-v2.pdf
+    Modified:   output/README.md
+    New:        output/critical-transitions.RData
+    New:        output/full.mv.norm.brm.rds
+    New:        output/geno.rich_model.brm.rds
+    New:        output/plant-growth-no-insects.RData
+    New:        output/reduced.1.brm.rds
+    New:        output/reduced.2.brm.rds
+    New:        output/reduced.3.brm.rds
+    New:        output/reduced.4.brm.rds
+    New:        output/reduced.5.brm.rds
+    New:        output/reduced.6.brm.rds
+    New:        output/reduced.7.brm.rds
+    New:        output/reduced.8.brm.rds
+    New:        output/structural-stability.RData
+    New:        output/timeseries_df.csv
+
 </code></pre>
 <p>
 Note that any generated files, e.g. HTML, png, CSS, etc., are not included in this status report because it is ok for generated content to have uncommitted changes.
@@ -404,10 +476,27 @@ Message
 <tbody>
 <tr>
 <td>
+html
+</td>
+<td>
+<a href="https://rawcdn.githack.com/mabarbour/genes-to-foodweb-stability/28c2a9ff486d0bb04645930eed0bff9c59b34d3c/docs/index.html" target="_blank">28c2a9f</a>
+</td>
+<td>
+mabarbour
+</td>
+<td>
+2020-02-05
+</td>
+<td>
+Build site.
+</td>
+</tr>
+<tr>
+<td>
 Rmd
 </td>
 <td>
-27ad8e2
+<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/27ad8e2d7935820d69afbecc014e8d8e885bd52e/analysis/index.Rmd" target="_blank">27ad8e2</a>
 </td>
 <td>
 mabarbour
@@ -426,7 +515,18 @@ Start workflowr project.
 </div>
 </div>
 </div>
-<p>Welcome to my research website.</p>
+<div id="this-website-contains-code-to-reproduce-the-analyses-reported-in-the-manuscript-genetic-diversity-increases-food-web-persistence-in-the-face-of-climate-warming.-please-click-on-the-links-below-to-review-the-analysis-youre-interested-in." class="section level3">
+<h3>This website contains code to reproduce the analyses reported in the manuscript “Genetic diversity increases food-web persistence in the face of climate warming”. Please click on the links below to review the analysis you’re interested in.</h3>
+</div>
+<div id="statistical-analysis-of-critical-transitions-and-resulting-food-webs" class="section level2">
+<h2><a href="critical-transitions.html">Statistical analysis of critical transitions and resulting food webs</a></h2>
+</div>
+<div id="bayesian-multivariate-autoregressive-model-and-structural-stability" class="section level2">
+<h2><a href="structural-stability.html">Bayesian multivariate autoregressive model and structural stability</a></h2>
+</div>
+<div id="statistical-analysis-of-plant-growth-in-absence-of-insects" class="section level2">
+<h2><a href="plant-growth-no-insects.html">Statistical analysis of plant growth in absence of insects</a></h2>
+</div>
 
 
 <!-- Adjust MathJax settings so that all math formulae are shown using

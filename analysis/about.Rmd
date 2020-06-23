@@ -7,4 +7,8 @@ editor_options:
   chunk_output_type: console
 ---
 
-Describe your project.
+### **Abstract**: Genetic diversity provides the raw material for species to adapt and persist in the face of climate change. Yet, the extent to which these genetic effects scale at the level of ecological communities remains unclear. Here we experimentally test the effect of plant genetic diversity on the persistence of an insect food web under a current and future warming scenario. We found that plant genetic diversity increased food-web persistence by increasing the intrinsic growth rates of species across multiple trophic levels. This positive effect was robust to a 3$^{\circ}$C warming scenario and resulted from allelic variation at two genes that control the biosynthesis of chemical defenses. Our results suggest that the ongoing loss of genetic diversity may undermine the persistence and functioning of ecosystems in a changing world. 
+
+### **One-sentence summary**: We show that the loss of genetic diversity accelerates the extinction of interconnected species from an experimental food web.
+
+### Please see the main text and supplementary materials of the manuscript for details.
