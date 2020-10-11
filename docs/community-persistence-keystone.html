@@ -9,11 +9,11 @@
 <meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
 
 
-<meta name="author" content="Matthew A. Barbour" />
+<meta name="author" content="Matthew Barbour" />
 
 <meta name="date" content="2020-10-11" />
 
-<title>Plant growth in the absence of insects</title>
+<title>Community persistence</title>
 
 <script src="site_libs/jquery-1.11.3/jquery.min.js"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -27,7 +27,6 @@
 <script src="site_libs/navigation-1.1/tabsets.js"></script>
 <link href="site_libs/highlightjs-9.12.0/textmate.css" rel="stylesheet" />
 <script src="site_libs/highlightjs-9.12.0/highlight.js"></script>
-<script src="site_libs/kePrint-0.0.1/kePrint.js"></script>
 <link href="site_libs/font-awesome-5.1.0/css/all.css" rel="stylesheet" />
 <link href="site_libs/font-awesome-5.1.0/css/v4-shims.css" rel="stylesheet" />
 
@@ -386,8 +385,8 @@ div.section {
 
 
 
-<h1 class="title toc-ignore">Plant growth in the absence of insects</h1>
-<h4 class="author">Matthew A. Barbour</h4>
+<h1 class="title toc-ignore">Community persistence</h1>
+<h4 class="author">Matthew Barbour</h4>
 <h4 class="date">2020-10-11</h4>
 
 </div>
@@ -568,7 +567,7 @@ Message
 Rmd
 </td>
 <td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/761af40bd168cdea0f6a1b579da95e50a4322f0a/analysis/plant-growth-no-insects.Rmd" target="_blank">761af40</a>
+<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/761af40bd168cdea0f6a1b579da95e50a4322f0a/analysis/community-persistence-keystone.Rmd" target="_blank">761af40</a>
 </td>
 <td>
 mabarbour
@@ -580,57 +579,6 @@ mabarbour
 Refocus analysis on keystone gene result.
 </td>
 </tr>
-<tr>
-<td>
-html
-</td>
-<td>
-<a href="https://rawcdn.githack.com/mabarbour/genes-to-foodweb-stability/51fc18b769a6ad737e3562079470b87672e5b42e/docs/plant-growth-no-insects.html" target="_blank">51fc18b</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2020-06-23
-</td>
-<td>
-Build site.
-</td>
-</tr>
-<tr>
-<td>
-Rmd
-</td>
-<td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/86116c87e556ad781ab547037a44f6391ee17703/analysis/plant-growth-no-insects.Rmd" target="_blank">86116c8</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2020-06-23
-</td>
-<td>
-bioRxiv version of code and data.
-</td>
-</tr>
-<tr>
-<td>
-html
-</td>
-<td>
-<a href="https://rawcdn.githack.com/mabarbour/genes-to-foodweb-stability/86116c87e556ad781ab547037a44f6391ee17703/docs/plant-growth-no-insects.html" target="_blank">86116c8</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2020-06-23
-</td>
-<td>
-bioRxiv version of code and data.
-</td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -640,387 +588,162 @@ bioRxiv version of code and data.
 </div>
 <div id="setup" class="section level1">
 <h1>Setup</h1>
-<pre class="r"><code># load data
-ChamberNoInsectsDF &lt;- read_csv(&quot;data/PreExperimentNoInsectsPlantBiomass.csv&quot;) %&gt;%
-  mutate(Cage = as.character(Cage),
-         Pot = as.character(Pot))
+<pre class="r"><code># Load and manage data
+df &lt;- read_csv(&quot;data/arabidopsis_clean_df.csv&quot;) %&gt;%
+  # renaming for brevity
+  rename(cage = Cage,
+         com = Composition,
+         week = Week,
+         temp = Temperature,
+         rich = Richness) %&gt;%
+  mutate(cage = as.character(cage),
+         fweek = factor(ifelse(week &lt; 10, paste(&quot;0&quot;, week, sep=&quot;&quot;), week)),
+         temp = ifelse(temp==&quot;20 C&quot;, 0, 3)) %&gt;% # set to 3 so that 1 C = 1 genotype
+  arrange(cage, week)
 
-# conduct analyses at cage level
-CageLevelBiomass &lt;- ChamberNoInsectsDF %&gt;%
-  # sum biomass across both pots
-  group_by(Cage, Temperature, Richness, Composition, Col, gsm1, AOP2, AOP2.gsoh) %&gt;%
-  summarise_at(vars(Biomass_g), list(sum)) %&gt;%
-  # tidy data
+# focus on last week of experiment
+df17 &lt;- df %&gt;%
+  # counter information is not relevant (because it is the same), so we summarise across it
+  group_by(cage, fweek, week, temp, rich, Col, gsm1, AOP2, AOP2.gsoh, com) %&gt;%
+  summarise_at(vars(BRBR_Survival, LYER_Survival, Mummy_Ptoids_Survival), list(mean)) %&gt;%
   ungroup() %&gt;%
-  select(cage = Cage, temp = Temperature, rich = Richness, com = Composition, Col, gsm1, AOP2, AOP2.gsoh, Biomass_g) %&gt;%
-  # adjust temp and rich so effect of +1 C is comparable to +1 genotype
-  mutate(temp = ifelse(temp == &quot;20 C&quot;, 0, 3),
-         rich = rich - 1,
-         # define orthogonal constrasts to test for above-average allele effects.
-        # aop2_vs_AOP2 must be included first
-        aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
-        mam1_vs_MAM1 = gsm1 - Col, # aop2_vs_AOP2 must be included in model
-        gsoh_vs_GSOH = AOP2.gsoh - AOP2)
-
-# source in ANOVA GLM for adjusted F-tests
-source(&#39;code/glm-ftest.R&#39;)</code></pre>
+  # we need the dataset to go through week 17, rather than removing cages as they transition
+  # to a collapsed community as in `state_df`
+  mutate(BRBR = ifelse(is.na(BRBR_Survival) == T, 0, BRBR_Survival),
+         LYER = ifelse(is.na(LYER_Survival) == T, 0, LYER_Survival),
+         Ptoid = ifelse(is.na(Mummy_Ptoids_Survival) == T, 0, Mummy_Ptoids_Survival)) %&gt;%
+  filter(week == 17) %&gt;%
+  mutate(# calculate persistence
+    Persistence = BRBR + LYER + Ptoid,
+    rich - 1, # baseline of 1 genotype
+    # define orthogonal constrasts to test for above-average allele effects.
+    # aop2_vs_AOP2 must be included first before testing for mam1_vs_MAM1 and gsoh_vs_GSOH
+    aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
+    mam1_vs_MAM1 = gsm1 - Col,
+    gsoh_vs_GSOH = AOP2.gsoh - AOP2) 
+# note that lowercase denotes the null (non-functional) version of the allele
+# wherease capital indicates the functional form</code></pre>
+<pre class="r"><code># source in useful functions for analyses
+source(&#39;code/glm-ftest.R&#39;) # ANOVA GLM</code></pre>
 </div>
-<div id="show-equivalence-of-analysis-of-deviance-and-anova" class="section level1">
-<h1>Show equivalence of Analysis of deviance and ANOVA</h1>
-<p>An Analysis of deviance on a GLM with a gaussian error distribution is equivalent to ANOVA. However, unadjusted <em>F</em>-tests are inappropriate because all terms are tested against residual variation rather than the intended error level (e.g. <code>com</code> for <code>rich</code>). The analysis below is just to prove this equivalence. I’m doing this so I can use the same function <code>glm.ftest.v2</code> for the ANOVA in the following section.</p>
+<div id="analysis" class="section level1">
+<h1>Analysis</h1>
+<p>Below, we reproduce the analysis of deviance for food-web persistence presented in Table S1 in the Supplementary Material.</p>
+<p>The analysis below tests for a general effect of genetic diversity (<code>rich</code>) as well as above-average effects of allelic differences at <em>AOP2</em>, <em>MAM1</em>, and <em>GSOH</em>. It also tests for an effect of temperature (<code>temp</code>) and whether temperature modifies any of these genetic effects.</p>
 <pre class="r"><code>glm.ftest.v2(
-  model = glm(data = CageLevelBiomass,
-              family = gaussian(link = &quot;identity&quot;),
-              # logging improves residual distribution
-              formula = log(Biomass_g) ~ temp + rich + com + temp:rich + temp:com),
- test.formula = list(c(&quot;temp&quot;,&quot;temp:com&quot;),
-                     c(&quot;rich&quot;,&quot;com&quot;),
-                     c(&quot;temp:rich&quot;,&quot;temp:com&quot;)))[[1]]</code></pre>
-<pre><code>       term df   dev mean_dev     F      P
-1      temp  1 6.002    6.002 75.51 0.0000
-2      rich  1 0.038    0.038  0.48 0.4948
-3       com  9 3.396    0.377  4.75 0.0003
-4 temp:rich  1 0.027    0.027  0.34 0.5656
-5  temp:com  9 0.826    0.092  1.15 0.3511
-6 Residuals 38 3.021    0.079    NA     NA</code></pre>
-<pre class="r"><code>anova(aov(log(Biomass_g) ~ temp + rich + com + temp:rich + temp:com, CageLevelBiomass))</code></pre>
-<pre><code>Analysis of Variance Table
-
-Response: log(Biomass_g)
-          Df Sum Sq Mean Sq F value    Pr(&gt;F)    
-temp       1 6.0019  6.0019 75.5075 1.455e-10 ***
-rich       1 0.0378  0.0378  0.4753 0.4947633    
-com        9 3.3961  0.3773  4.7473 0.0002907 ***
-temp:rich  1 0.0267  0.0267  0.3360 0.5655796    
-temp:com   9 0.8256  0.0917  1.1540 0.3511397    
-Residuals 38 3.0205  0.0795                      
----
-Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1</code></pre>
-</div>
-<div id="reproduce-table-s5" class="section level1">
-<h1>Reproduce Table S5</h1>
-<pre class="r"><code># fit ANOVA
-biomass_noinsects_glmf &lt;- glm.ftest.v2(
-  model = glm(data = CageLevelBiomass,
-              family = gaussian(link = &quot;identity&quot;),
-              # logging improves residual distribution
-              formula = log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + com + temp:(rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH) + temp:com),
- test.formula = list(c(&quot;temp&quot;,&quot;temp:com&quot;),
-                     c(&quot;rich&quot;,&quot;com&quot;),
-                     c(&quot;aop2_vs_AOP2&quot;,&quot;com&quot;),
-                     c(&quot;mam1_vs_MAM1&quot;,&quot;com&quot;),
-                     c(&quot;gsoh_vs_GSOH&quot;,&quot;com&quot;),
-                     c(&quot;temp:rich&quot;,&quot;temp:com&quot;),
-                     c(&quot;temp:aop2_vs_AOP2&quot;,&quot;temp:com&quot;),
-                     c(&quot;temp:mam1_vs_MAM1&quot;,&quot;temp:com&quot;),
-                     c(&quot;temp:gsoh_vs_GSOH&quot;,&quot;temp:com&quot;)))[[3]] %&gt;%
-  # tidy table
-  select(Source = treatment, 
-         `df (Source)` = num_df, 
+  model = glm(data = df17,
+              family = quasibinomial(link = &quot;cloglog&quot;),
+              formula = terms(Persistence/3 ~
+                                temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + com +
+                                temp:(rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH) + temp:com,
+                              keep.order = T)),
+  test.formula = list(
+    c(&quot;temp&quot;,&quot;temp:com&quot;),
+    c(&quot;rich&quot;,&quot;com&quot;),
+    c(&quot;aop2_vs_AOP2&quot;,&quot;com&quot;),
+    c(&quot;mam1_vs_MAM1&quot;,&quot;com&quot;),
+    c(&quot;gsoh_vs_GSOH&quot;,&quot;com&quot;),
+    c(&quot;temp:rich&quot;,&quot;temp:com&quot;),
+    c(&quot;temp:aop2_vs_AOP2&quot;,&quot;temp:com&quot;),
+    c(&quot;temp:mam1_vs_MAM1&quot;,&quot;temp:com&quot;),
+    c(&quot;temp:gsoh_vs_GSOH&quot;,&quot;temp:com&quot;))
+)[[3]] %&gt;%
+  select(Source = treatment,
+         `df (Source)` = num_df,
          `df (Error)` = den_df,
          Deviance = deviance,
          `Mean Deviance` = mean_deviance,
-         F = F, P = P, Error = error)
-
-# reproduce table S5 in Supplementary Materials
-biomass_noinsects_glmf %&gt;%
-  kable(., caption = &quot;Analysis of variance for plant biomass (log transformed) in the absence of insects.&quot;, booktabs = T) %&gt;%
-  kable_styling(latex_options = c(&quot;striped&quot;, &quot;hold_position&quot;))</code></pre>
-<table class="table" style="margin-left: auto; margin-right: auto;">
-<caption>
-Analysis of variance for plant biomass (log transformed) in the absence of insects.
-</caption>
-<thead>
-<tr>
-<th style="text-align:left;">
-Source
-</th>
-<th style="text-align:right;">
-df (Source)
-</th>
-<th style="text-align:right;">
-df (Error)
-</th>
-<th style="text-align:right;">
-Deviance
-</th>
-<th style="text-align:right;">
-Mean Deviance
-</th>
-<th style="text-align:right;">
-F
-</th>
-<th style="text-align:left;">
-P
-</th>
-<th style="text-align:left;">
-Error
-</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;">
-temp
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-6.00
-</td>
-<td style="text-align:right;">
-6.00
-</td>
-<td style="text-align:right;">
-53.881
-</td>
-<td style="text-align:left;">
-&lt;0.001
-</td>
-<td style="text-align:left;">
-temp:com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-rich
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.04
-</td>
-<td style="text-align:right;">
-0.04
-</td>
-<td style="text-align:right;">
-0.242
-</td>
-<td style="text-align:left;">
-0.64
-</td>
-<td style="text-align:left;">
-com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-aop2_vs_AOP2
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-2.34
-</td>
-<td style="text-align:right;">
-2.34
-</td>
-<td style="text-align:right;">
-14.952
-</td>
-<td style="text-align:left;">
-0.008
-</td>
-<td style="text-align:left;">
-com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-mam1_vs_MAM1
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.08
-</td>
-<td style="text-align:right;">
-0.08
-</td>
-<td style="text-align:right;">
-0.505
-</td>
-<td style="text-align:left;">
-0.504
-</td>
-<td style="text-align:left;">
-com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-gsoh_vs_GSOH
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.04
-</td>
-<td style="text-align:right;">
-0.04
-</td>
-<td style="text-align:right;">
-0.287
-</td>
-<td style="text-align:left;">
-0.612
-</td>
-<td style="text-align:left;">
-com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:rich
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.03
-</td>
-<td style="text-align:right;">
-0.03
-</td>
-<td style="text-align:right;">
-0.240
-</td>
-<td style="text-align:left;">
-0.642
-</td>
-<td style="text-align:left;">
-temp:com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:aop2_vs_AOP2
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.00
-</td>
-<td style="text-align:right;">
-0.00
-</td>
-<td style="text-align:right;">
-0.039
-</td>
-<td style="text-align:left;">
-0.849
-</td>
-<td style="text-align:left;">
-temp:com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:mam1_vs_MAM1
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.06
-</td>
-<td style="text-align:right;">
-0.06
-</td>
-<td style="text-align:right;">
-0.582
-</td>
-<td style="text-align:left;">
-0.474
-</td>
-<td style="text-align:left;">
-temp:com
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:gsoh_vs_GSOH
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-6
-</td>
-<td style="text-align:right;">
-0.09
-</td>
-<td style="text-align:right;">
-0.09
-</td>
-<td style="text-align:right;">
-0.790
-</td>
-<td style="text-align:left;">
-0.408
-</td>
-<td style="text-align:left;">
-temp:com
-</td>
-</tr>
-</tbody>
-</table>
+         F = F, P = P, Error = error)</code></pre>
+<pre><code>             Source df (Source) df (Error) Deviance Mean Deviance      F     P
+1              temp           1          6     1.87          1.87  3.294 0.119
+2              rich           1          6     1.32          1.32 20.153 0.004
+3      aop2_vs_AOP2           1          6     0.75          0.75 11.499 0.015
+4      mam1_vs_MAM1           1          6     0.00          0.00  0.008 0.931
+5      gsoh_vs_GSOH           1          6     0.08          0.08  1.236 0.309
+6         temp:rich           1          6     0.02          0.02  0.028 0.873
+7 temp:aop2_vs_AOP2           1          6     0.03          0.03  0.046 0.837
+8 temp:mam1_vs_MAM1           1          6     0.40          0.40  0.698 0.435
+9 temp:gsoh_vs_GSOH           1          6     0.19          0.19  0.329 0.587
+     Error
+1 temp:com
+2      com
+3      com
+4      com
+5      com
+6 temp:com
+7 temp:com
+8 temp:com
+9 temp:com</code></pre>
+<p>We observe a clear effect of genetic diversity and an above-average contribution of <em>AOP2</em> to food-web persistence. Temperature did not have a clear effect on food-web persistence and didn’t modify genetic effects.</p>
 </div>
-<div id="reproduce-fig.-s6" class="section level1">
-<h1>Reproduce Fig. S6</h1>
-<pre class="r"><code># calculate 95% confidence intervals with `com` as the cluster level
-aop2_CI &lt;- conf_int(
-  glm(data = CageLevelBiomass,
-              family = gaussian(link = &quot;identity&quot;),
-              formula = log(Biomass_g) ~ -1 + temp + I(AOP2 + AOP2.gsoh) + I(Col + gsm1)),
-  vcov = &quot;CR2&quot;, 
-  test = &quot;naive-t&quot;, 
-  coefs = c(&quot;I(AOP2 + AOP2.gsoh)&quot;,&quot;I(Col + gsm1)&quot;), 
-  cluster = CageLevelBiomass$com) %&gt;%
+<div id="effect-sizes" class="section level1">
+<h1>Effect sizes</h1>
+<p>Genetic diversity increased the probability of a species persisting by 0.3911896%.</p>
+<pre class="r"><code># calculate change in probability
+exp(coef(glm(data = df17, family = quasibinomial(link = &quot;cloglog&quot;), formula = Persistence/3 ~ temp + rich))[&quot;rich&quot;]) - 1</code></pre>
+<pre><code>     rich 
+0.3911896 </code></pre>
+</div>
+<div id="keystone-gene-plot-fig.-1-in-main-text" class="section level1">
+<h1>Keystone gene plot (Fig. 1 in main text)</h1>
+<pre class="r"><code>gene_CI &lt;- conf_int(
+  glm(data = df17,
+      family = quasibinomial(link = &quot;cloglog&quot;),
+      formula = terms(Persistence/3 ~
+                        temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH,
+                      keep.order = T)),
+  vcov = &quot;CR2&quot;,
+  test = &quot;naive-t&quot;,
+  cluster = df17$com,
+  coefs = c(&quot;aop2_vs_AOP2&quot;,&quot;mam1_vs_MAM1&quot;,&quot;gsoh_vs_GSOH&quot;)
+) %&gt;%
+  data.frame() %&gt;%
+  rownames_to_column(var = &quot;term&quot;) %&gt;%
+  mutate(gene = factor(c(&quot;AOP2&quot;,&quot;MAM1&quot;,&quot;GSOH&quot;), levels = c(&quot;AOP2&quot;,&quot;MAM1&quot;,&quot;GSOH&quot;)))#ordered = T))
+
+# replacing the average genotype with a genotype that has an aop2 (vs AOP2) allele
+# results in a 28% increase in probability of a species persisting
+exp(gene_CI$beta[1])-1</code></pre>
+<pre><code>[1] 0.2824477</code></pre>
+<pre class="r"><code># this plot makes clear that AOP2 gene has an above-average effect on community persistence.
+ggplot(gene_CI, aes(x = gene, y = exp(beta)-1)) +
+  geom_point(size = 5) +
+  geom_linerange(aes(ymax = exp(beta + SE)-1, ymin = exp(beta - SE)-1), size = 1.5) +
+  geom_linerange(aes(ymax = exp(CI_U)-1, ymin = exp(CI_L)-1)) +
+  geom_hline(yintercept = 0, linetype = &quot;dotted&quot;) +
+  scale_x_discrete(labels = c(expression(italic(AOP2)),expression(italic(MAM1)),expression(italic(GSOH)))) +
+  #scale_y_continuous(&quot;Probability of species persisting ()&quot;) +
+  scale_y_continuous(name = expression(&quot;Effect on food-web persistence &quot;(Delta~&quot;%&quot;))) + # &quot;odds&quot;
+  xlab(&quot;&quot;)</code></pre>
+<p><img src="figure/community-persistence-keystone.Rmd/unnamed-chunk-5-1.png" width="672" style="display: block; margin: auto;" /></p>
+<pre class="r"><code># ggsave(filename = &quot;figures/keystone-gene.pdf&quot;, height = 6, width = 8)</code></pre>
+<p>Let’s visualize the effect of particular alleles within <em>AOP2</em>.</p>
+<pre class="r"><code>aop2_CI &lt;- conf_int(
+  glm(data = df17,
+      family = quasibinomial(link = &quot;cloglog&quot;),
+      formula = terms(Persistence/3 ~
+                        temp + I(AOP2 + AOP2.gsoh) + I(Col + gsm1),
+                      keep.order = T)),
+  vcov = &quot;CR2&quot;,
+  test = &quot;naive-t&quot;,
+  cluster = df17$com,
+  coefs = c(&quot;I(AOP2 + AOP2.gsoh)&quot;,&quot;I(Col + gsm1)&quot;)
+) %&gt;%
   data.frame() %&gt;%
   rownames_to_column(var = &quot;term&quot;) %&gt;%
   mutate(allele = c(&quot;AOP2&quot;,&quot;aop2&quot;))
-# note that I back transform to original scale for plotting
-exp(aop2_CI$beta[2])</code></pre>
-<pre><code>[1] 1.169096</code></pre>
+exp(aop2_CI$beta[2])-1 # 80% increase</code></pre>
+<pre><code>[1] 0.7992812</code></pre>
 <pre class="r"><code># get the effect of each genotype
 mean_geno &lt;- conf_int(
-  glm(data = CageLevelBiomass,
-              family = gaussian(link = &quot;identity&quot;),
-              formula = log(Biomass_g) ~ -1 + temp + AOP2 + AOP2.gsoh + Col + gsm1),
+  glm(data = df17,
+      family = quasibinomial(link = &quot;cloglog&quot;),
+      formula = terms(Persistence/3 ~
+                        temp + AOP2 + AOP2.gsoh + Col + gsm1,
+                      keep.order = T)),
   vcov = &quot;CR2&quot;,
   test = &quot;naive-t&quot;,
-  cluster = CageLevelBiomass$com,
+  cluster = df17$com,
   coefs = c(&quot;AOP2&quot;,&quot;AOP2.gsoh&quot;,&quot;Col&quot;,&quot;gsm1&quot;)
 ) %&gt;%
   data.frame() %&gt;%
@@ -1028,62 +751,82 @@ mean_geno &lt;- conf_int(
   mutate(allele = c(&quot;AOP2&quot;,&quot;AOP2&quot;,&quot;aop2&quot;,&quot;aop2&quot;),
          term = factor(term, levels = c(&quot;Col&quot;,&quot;gsm1&quot;,&quot;AOP2&quot;,&quot;AOP2.gsoh&quot;), labels = c(&quot;Col&quot;,&quot;gsm1&quot;,&quot;AOP2&quot;,&quot;AOP2/gsoh&quot;)))
 
-# plot on original scale
 # adding a genotype with an aop2 allele to the population doubles the likelihood of species persistence
-ggplot(aop2_CI, aes(x = allele, y = exp(beta))) +
+ggplot(aop2_CI, aes(x = allele, y = exp(beta)-1)) +
   geom_point(size = 5) +
   geom_point(data = mean_geno, aes(color = term), size = 5, position = position_dodge(width = 0.3)) +
-  geom_linerange(aes(ymax = exp(beta + SE), ymin = exp(beta - SE)), size = 1.5) +
-  geom_linerange(aes(ymax = exp(CI_U), ymin = exp(CI_L))) +
+  geom_linerange(aes(ymax = exp(beta + SE)-1, ymin = exp(beta - SE)-1), size = 1.5) +
+  geom_linerange(aes(ymax = exp(CI_U)-1, ymin = exp(CI_L)-1)) +
+  geom_hline(yintercept = 0, linetype = &quot;dotted&quot;) +
   scale_x_discrete(labels = c(&quot;AOP2\u2013&quot;,&quot;AOP2+&quot;)) +
-  scale_y_continuous(&quot;Plant biomass (g)&quot;) +
-  xlab(&quot;Allele&quot;) + 
-  scale_color_manual(values = c(&quot;darkgreen&quot;,&quot;steelblue&quot;,&quot;darkorange&quot;,&quot;firebrick1&quot;), name = &quot;&quot;) + 
-  theme_cowplot(font_size = 18, line_size = 1)</code></pre>
-<p><img src="figure/plant-growth-no-insects.Rmd/unnamed-chunk-4-1.png" width="672" style="display: block; margin: auto;" /></p>
-<p>
-<button type="button" class="btn btn-default btn-xs btn-workflowr btn-workflowr-fig" data-toggle="collapse" data-target="#fig-unnamed-chunk-4-1">
-Past versions of unnamed-chunk-4-1.png
-</button>
-</p>
-<div id="fig-unnamed-chunk-4-1" class="collapse">
-<div class="table-responsive">
-<table class="table table-condensed table-hover">
-<thead>
-<tr>
-<th>
-Version
-</th>
-<th>
-Author
-</th>
-<th>
-Date
-</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/86116c87e556ad781ab547037a44f6391ee17703/docs/figure/plant-growth-no-insects.Rmd/unnamed-chunk-4-1.png" target="_blank">86116c8</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2020-06-23
-</td>
-</tr>
-</tbody>
-</table>
+  scale_y_continuous(expression(&quot;Effect on food-web persistence &quot;(Delta~&quot;%&quot;))) +
+  xlab(&quot;Allele&quot;) + #xlab(expression(&quot;Allele at &quot;~italic(AOP2)~&quot;gene&quot;)) +
+  scale_color_manual(values = c(&quot;darkgreen&quot;,&quot;steelblue&quot;,&quot;darkorange&quot;,&quot;firebrick1&quot;), name = &quot;&quot;)#, name = &quot;Genotype&quot;)</code></pre>
+<p><img src="figure/community-persistence-keystone.Rmd/unnamed-chunk-6-1.png" width="672" style="display: block; margin: auto;" /></p>
 </div>
-</div>
-<pre class="r"><code># ggsave(filename = &quot;figures/AOP2-growth-no-insects.pdf&quot;, height = 6, width = 8, device=cairo_pdf)</code></pre>
+<div id="does-aop2--explain-genetic-diversity-effect" class="section level1">
+<h1>Does <em>AOP2</em><span class="math inline">\(-\)</span> explain genetic diversity effect?</h1>
+<pre class="r"><code>glm.ftest.v2(
+  model = glm(data = df17,
+              family = quasibinomial(link = &quot;cloglog&quot;),
+              formula = terms(Persistence/3 ~
+                                temp + I(Col + gsm1) + rich + com +
+                                temp + temp:com,
+                              keep.order = T)),
+  test.formula = list(
+    c(&quot;temp&quot;,&quot;temp:com&quot;),
+    c(&quot;I(Col + gsm1)&quot;,&quot;com&quot;),
+    #c(&quot;I(AOP2 + AOP2.gsoh)&quot;,&quot;com&quot;), # rich has a very strong effect if you only include AOP2 + AOP2.gsoh
+    c(&quot;rich&quot;,&quot;com&quot;))
+)[[3]] %&gt;%
+  select(Source = treatment,
+         `df (Source)` = num_df,
+         `df (Error)` = den_df,
+         Deviance = deviance,
+         `Mean Deviance` = mean_deviance,
+         F = F, P = P, Error = error)</code></pre>
+<pre><code>         Source df (Source) df (Error) Deviance Mean Deviance      F      P
+1          temp           1         10     1.87          1.87  4.639  0.057
+2 I(Col + gsm1)           1          8     2.01          2.01 33.965 &lt;0.001
+3          rich           1          8     0.06          0.06  0.988  0.349
+     Error
+1 temp:com
+2      com
+3      com</code></pre>
+<p>The above model suggests that the effect of genetic diversity is explained entirely by the increased probability of having genotypes with an <em>AOP2</em><span class="math inline">\(-\)</span> in the plant population.</p>
+<p>Note that if instead we modeled the effect of <em>AOP2</em>+ before genetic diversity, we still observe a clear effect of genetic diversity.</p>
+<pre class="r"><code>glm.ftest.v2(
+  model = glm(data = df17,
+              family = quasibinomial(link = &quot;cloglog&quot;),
+              formula = terms(Persistence/3 ~
+                                temp + I(AOP2 + AOP2.gsoh) + rich + com +
+                                temp + temp:com,
+                              keep.order = T)),
+  test.formula = list(
+    c(&quot;temp&quot;,&quot;temp:com&quot;),
+    #c(&quot;I(Col + gsm1)&quot;,&quot;com&quot;),
+    c(&quot;I(AOP2 + AOP2.gsoh)&quot;,&quot;com&quot;),
+    c(&quot;rich&quot;,&quot;com&quot;))
+)[[3]] %&gt;%
+  select(Source = treatment,
+         `df (Source)` = num_df,
+         `df (Error)` = den_df,
+         Deviance = deviance,
+         `Mean Deviance` = mean_deviance,
+         F = F, P = P, Error = error)</code></pre>
+<pre><code>               Source df (Source) df (Error) Deviance Mean Deviance      F
+1                temp           1         10     1.87          1.87  4.639
+2 I(AOP2 + AOP2.gsoh)           1          8     0.02          0.02  0.376
+3                rich           1          8     2.04          2.04 34.577
+       P    Error
+1  0.057 temp:com
+2  0.557      com
+3 &lt;0.001      com</code></pre>
 </div>
 <div id="save-analysis" class="section level1">
 <h1>Save analysis</h1>
 <p>Write out an <code>.RData</code> file to use for creating the Supplementary Material Results.</p>
-<pre class="r"><code># save.image(file = &quot;output/plant-growth-no-insects.RData&quot;)</code></pre>
+<pre class="r"><code># save.image(file = &quot;output/community-persistence-keystone.RData&quot;)</code></pre>
 <br>
 <p>
 <button type="button" class="btn btn-default btn-workflowr btn-workflowr-sessioninfo" data-toggle="collapse" data-target="#workflowr-sessioninfo" style="display: block;">
@@ -1112,7 +855,7 @@ attached base packages:
 [1] stats     graphics  grDevices utils     datasets  methods   base     
 
 other attached packages:
- [1] cowplot_1.0.0      clubSandwich_0.3.5 kableExtra_1.1.0   forcats_0.4.0     
+ [1] kableExtra_1.1.0   clubSandwich_0.3.5 cowplot_1.0.0      forcats_0.4.0     
  [5] stringr_1.4.0      dplyr_0.8.3        purrr_0.3.3        readr_1.3.1       
  [9] tidyr_1.0.2        tibble_2.1.3       ggplot2_3.2.1      tidyverse_1.3.0   
 
@@ -1120,19 +863,19 @@ loaded via a namespace (and not attached):
  [1] Rcpp_1.0.2        lubridate_1.7.4   lattice_0.20-38   zoo_1.8-6        
  [5] assertthat_0.2.1  rprojroot_1.3-2   digest_0.6.20     R6_2.4.0         
  [9] cellranger_1.1.0  backports_1.1.4   reprex_0.3.0      evaluate_0.14    
-[13] httr_1.4.1        highr_0.8         pillar_1.4.2      rlang_0.4.4      
-[17] lazyeval_0.2.2    readxl_1.3.1      rstudioapi_0.10   whisker_0.3-2    
-[21] rmarkdown_2.0     labeling_0.3      webshot_0.5.1     munsell_0.5.0    
-[25] broom_0.5.2       compiler_3.6.3    httpuv_1.5.1      modelr_0.1.5     
-[29] xfun_0.9          pkgconfig_2.0.2   htmltools_0.3.6   tidyselect_0.2.5 
-[33] workflowr_1.6.0   viridisLite_0.3.0 crayon_1.3.4      dbplyr_1.4.2     
-[37] withr_2.1.2       later_1.0.0       grid_3.6.3        nlme_3.1-140     
-[41] jsonlite_1.6      gtable_0.3.0      lifecycle_0.1.0   DBI_1.0.0        
-[45] git2r_0.26.1      magrittr_1.5      scales_1.0.0      cli_1.1.0        
-[49] stringi_1.4.3     fs_1.3.1          promises_1.0.1    xml2_1.2.2       
-[53] generics_0.0.2    vctrs_0.2.2       sandwich_2.5-1    tools_3.6.3      
-[57] glue_1.3.1        hms_0.5.3         yaml_2.2.0        colorspace_1.4-1 
-[61] rvest_0.3.5       knitr_1.26        haven_2.2.0      </code></pre>
+[13] httr_1.4.1        pillar_1.4.2      rlang_0.4.4       lazyeval_0.2.2   
+[17] readxl_1.3.1      rstudioapi_0.10   whisker_0.3-2     rmarkdown_2.0    
+[21] labeling_0.3      webshot_0.5.1     munsell_0.5.0     broom_0.5.2      
+[25] compiler_3.6.3    httpuv_1.5.1      modelr_0.1.5      xfun_0.9         
+[29] pkgconfig_2.0.2   htmltools_0.3.6   tidyselect_0.2.5  workflowr_1.6.0  
+[33] viridisLite_0.3.0 crayon_1.3.4      dbplyr_1.4.2      withr_2.1.2      
+[37] later_1.0.0       grid_3.6.3        nlme_3.1-140      jsonlite_1.6     
+[41] gtable_0.3.0      lifecycle_0.1.0   DBI_1.0.0         git2r_0.26.1     
+[45] magrittr_1.5      scales_1.0.0      cli_1.1.0         stringi_1.4.3    
+[49] fs_1.3.1          promises_1.0.1    xml2_1.2.2        generics_0.0.2   
+[53] vctrs_0.2.2       sandwich_2.5-1    tools_3.6.3       glue_1.3.1       
+[57] hms_0.5.3         yaml_2.2.0        colorspace_1.4-1  rvest_0.3.5      
+[61] knitr_1.26        haven_2.2.0      </code></pre>
 </div>
 </div>
 
