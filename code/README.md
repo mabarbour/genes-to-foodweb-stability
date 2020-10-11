@@ -2,7 +2,7 @@
 
 ## `glm-ftest.R`
 
-Contains the function `glm.ftest.v2` to conduct an analysis of deviance and *F*-tests on the appropriate error term for generalized linear models. This function was used to produce Tables S1-S4 in the Supplementary Material, as well as the mulinomial ANOVA GLMs presented in the main text of the paper.
+Contains the function `glm.ftest.v2` to conduct an analysis of deviance and *F*-tests on the appropriate error term for generalized linear models. This function was used to produce Tables S1-S3 and S5 in the Supplementary Material.
 
 ## `plot-feasibility-domain.R`
 
@@ -19,3 +19,7 @@ This code is used for the non-equilibrium simulations presented in the Supplemen
 ## `temperature-structural-stability.R`
 
 This code reproduces the underlying figure for Fig. S1, which was then annotated using (Gimp)[https://www.gimp.org/].
+
+## `AOP2-LYER-Ptoid-persistence.R`
+
+This code allows me to check whether the Baysian multivariate autoregressive models were able to reproduce the positive effect of *AOP2*$-$ on food-chain persistence. This was important in guiding my model selection (final model given by equation 2 in the Supplementary Material).

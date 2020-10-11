@@ -2,22 +2,26 @@
 
 The folder contains processed data files. `.RData` files were used to efficiently reproduce results presented in the main text and Supplementary Material. Descriptions are given below:
 
-## `critical-transitions.RData`
+## `community-persistence-keystone.RData`
 
-Contains a saved version of data and analyses of critical transitions in food-web structure. This file is derived from `critical-transitions.Rmd`.
+Contains a saved version of data and analyses of overall food-web persistence. This file is derived from `community-persistence-keystone.Rmd`. This file was too large to use version control on GitHub; therefore, I used the [piggyback package](https://docs.ropensci.org/piggyback/articles/intro.html) to attach it to v2.0 (see Assets in Release v2.0 `output.2fcommunity-persistence-keystone.RData`)
 
-## `structural-stability.RData`
+## `critical-transitions-keystone.RData`
 
-Contains a saved version of data and analyses of the Bayesian multivariate autoregressive model and proximity to critical boundaries. This file is derived from `structural-stability.Rmd`. This file was too large to use version control on GitHub; therefore, I used the [piggyback package](https://docs.ropensci.org/piggyback/articles/intro.html) to attach it to v1.0 (see Assets in Release v1.0 `output.2fstructural-stability.RData`)
+Contains a saved version of data and analyses of critical transitions in food-web structure. This file is derived from `critical-transitions-keystone.Rmd`. This file was too large to use version control on GitHub; therefore, I used the [piggyback package](https://docs.ropensci.org/piggyback/articles/intro.html) to attach it to v2.0 (see Assets in Release v2.0 `output.2fcritical-transitions-keystone.RData`)
+
+## `structural-stability-keystone.RData`
+
+Contains a saved version of data and analyses of the Bayesian multivariate autoregressive model and proximity to critical boundaries. This file is derived from `structural-stability-keystone.Rmd`. This file was too large to use version control on GitHub; therefore, I used the [piggyback package](https://docs.ropensci.org/piggyback/articles/intro.html) to attach it to v1.0 (see Assets in Release v2.0 `output.2fstructural-stability-keystone.RData`)
 
 
-## `full.mv.norm.brm.rds` and `reduced.#.brm.rds`
+## `full.mv.norm.brm.keystone.rds` and `reduced.#.brm.keystone.rds`
 
-Contains saved versions of each model analyzed in `structural-stability.Rmd`. I saved each version because it considerably sped up generating `structural-stability.html`.
+Contains saved versions of each model analyzed in `structural-stability-keystone.Rmd`. I saved each version because it considerably sped up generating `structural-stability-keystone.html`.
 
 ## `plant-growth-no-insects.RData`
 
-Contains data and analysis of plant growth in the absence of insects.
+Contains data and analysis of plant growth in the absence of insects. This file was too large to use version control on GitHub; therefore, I used the [piggyback package](https://docs.ropensci.org/piggyback/articles/intro.html) to attach it to v2.0 (see Assets in Release v2.0 `output.2fplant-growth-no-insects.RData`)
 
 ## `timeseries_df.csv`
 

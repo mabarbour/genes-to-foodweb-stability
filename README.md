@@ -1,6 +1,6 @@
 # genes-to-foodweb-stability
 
-This repository contains data and code to reproduce analyses reported in the manuscript, "Genetic diversity increases food-web persistence in the face of climate warming".
+This repository contains data and code to reproduce analyses reported in the manuscript, "A keystone gene underlies the persistence of a food web". A previous version of this manuscript is available on [bioRxiv](https://doi.org/10.1101/2020.06.23.167387).
 
 Check out [mabarbour.github.io/genes-to-foodweb-stability](https://mabarbour.github.io/genes-to-foodweb-stability/) for a user-friendly website that reproduces all of the analyses used in the manuscript.
 

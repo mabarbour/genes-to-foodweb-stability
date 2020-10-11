@@ -8,11 +8,13 @@ editor_options:
   chunk_output_type: console
 ---
 
-### This website contains code to reproduce the analyses reported in the manuscript "Genetic diversity increases food-web persistence in the face of climate warming". Please click on the links below to review the analysis you're interested in.
+### This website contains code to reproduce the analyses reported in the manuscript "A keystone gene underlies the persistence of a food web". Please click on the links below to review the analysis you're interested in.
 
-## [Statistical analysis of critical transitions and resulting food webs](critical-transitions.html)
+## [Statistical analysis of overall food-web persistence](community-persistence-keystone.html)
 
-## [Bayesian multivariate autoregressive model and structural stability](structural-stability.html)
+## [Statistical analysis of critical transitions in food-web structure](critical-transitions-keystone.html)
+
+## [Bayesian multivariate autoregressive model and structural stability](structural-stability-keystone.html)
 
 ## [Statistical analysis of plant growth in absence of insects](plant-growth-no-insects.html)
 

@@ -1,0 +1,1656 @@
+---
+title: "Bayesian MAR(1) models and structural stability"
+author: "Matthew A. Barbour"
+date: "`r Sys.Date()`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# set knitr options
+knitr::opts_chunk$set(autodep = TRUE, message = FALSE)
+
+# load required libraries:
+library(RCurl)
+library(brms)
+library(tidyverse)
+library(cowplot)
+library(matlib) # for calculating matrix inverse
+library(tidybayes)
+library(knitr)
+library(rgl)
+
+# these options help Stan run faster:
+rstan::rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+
+# set ggplot theme
+theme_set(theme_cowplot())
+
+# for interactive rgl plot
+knit_hooks$set(webgl = hook_webgl)
+```
+
+
+# Setup
+
+```{r load-time-series}
+# load data
+timeseries_df <- read_csv("output/timeseries_df.csv") %>%
+  mutate(# this makes the intercept correspond to rich = 1, rather
+         # than the biologically implausible rich = 0
+         rich = rich - 1,
+         # now rich and temp coefficients will correspond to +1 genotype and +1 C
+         temp = ifelse(temp == "20 C", 0, 3),
+         uniq = paste(Cage, temp, com, Week_match, sep = "-"),
+         Week_match.1p = 1 + Week_match) # analysis doesn't like initial Week_match = 0, so I just added 1
+
+# filter dataset for multivariate analysis.
+# I only retain data for which all species had positive abundances at the previous time step
+full_df <- filter(timeseries_df, BRBR_t > 0, LYER_t > 0, Ptoid_t > 0) %>%
+  mutate(aop2_genotypes = Col + gsm1, # corresponds to average effect of genotype with a null AOP2- allele
+         AOP2_genotypes = AOP2 + AOP2.gsoh) # correspond to average effect of genotype with a functional AOP2+ allele
+```
+
+
+```{r}
+## source in useful functions
+
+# functions for plotting feasibility domains and calculating normalized angles from critical boundary
+source("code/plot-feasibility-domain.R") 
+# functions for non-equilibrium simulation
+source("code/simulate-community-dynamics.R")
+# general functions for evaluating what percentage of posterior is aop2 > AOP2 for the LYER-Ptoid boundary. these functions were important for guiding my model selection
+source("code/AOP2-LYER-Ptoid-persistence.R")
+```
+
+# Full model
+
+This model corresponds to equation 1 in the Supplementary Material of the paper. Note that `BRBR` = aphid *Brevicoryne brassicae*, `LYER` = aphid *Lipaphis erysimi*, and `Ptoid` = parasitoid *Diaeretiella rapae*.
+
+```{r full-mv-norm-formulas}
+# BRBR
+full.mv.norm.BRBR.bf <- bf(log1p(BRBR_t1) ~ 
+                       0 + intercept + offset(log1p(BRBR_t)) + 
+                        (log1p(BRBR_t) + log1p(LYER_t) + log1p(Ptoid_t))*(temp + aop2_genotypes + AOP2_genotypes) +
+                        log(Biomass_g_t1) +
+                        (1 | Cage) +
+                        ar(time = Week_match.1p, gr = Cage, p = 1, cov = FALSE))
+
+# LYER
+full.mv.norm.LYER.bf <- bf(log1p(LYER_t1) ~ 
+                       0 + intercept + offset(log1p(LYER_t)) + 
+                        (log1p(BRBR_t) + log1p(LYER_t) + log1p(Ptoid_t))*(temp + aop2_genotypes + AOP2_genotypes) +
+                        log(Biomass_g_t1) +
+                        (1 | Cage) +
+                        ar(time = Week_match.1p, gr = Cage, p = 1, cov = FALSE))
+
+# Ptoid
+full.mv.norm.Ptoid.bf <- bf(log1p(Ptoid_t1) ~ 
+                       0 + intercept + offset(log1p(Ptoid_t)) + 
+                        (log1p(BRBR_t) + log1p(LYER_t) + log1p(Ptoid_t))*(temp + aop2_genotypes + AOP2_genotypes) +
+                        log(Biomass_g_t1) +
+                        (1 | Cage) +
+                        ar(time = Week_match.1p, gr = Cage, p = 1, cov = FALSE))
+```
+
+
+## Set priors
+
+### Intrinsic growth rates
+
+```{r r-priors}
+# from Jahan et al. 2014, Journal of Insect Science
+# Table 4 lambda (finite rate of increase, discrete time analogue of intrinsic growth rate)
+# calculated on a per-day basis and not logged. This is why I multiply by 7 and then take the natural logarithm
+Jahan.r.BRBR <- log(c(1.42, 1.36, 1.32, 1.35, 1.40, 1.33, 1.38, 1.37) * 7)
+mean(Jahan.r.BRBR) # 2.26
+sd(Jahan.r.BRBR) # 0.02
+# visualize prior
+hist(rnorm(1000, mean(Jahan.r.BRBR), sd = 1))
+prior.r.BRBR <- "normal(2.26, 1)"
+
+# from Taghizadeh 2019, J. Agr. Sci. Tech.
+# Table 2 lambda (finite rate of increase, discrete time analogue of intrinsic growth rate)
+# calculated on a per-day basis and not logged. This is why I multiply by 7 and then take the natural logarithm
+Tag.r.LYER <- log(c(1.35, 1.30, 1.26, 1.23) * 7)
+mean(Tag.r.LYER) # 2.20
+sd(Tag.r.LYER) # 0.04
+# visualize prior
+hist(rnorm(1000, mean(Tag.r.LYER), sd = 1))
+prior.r.LYER <- "normal(2.20, 1)"
+
+# random effects prior based on variance among cultivars
+# I'm just going to use this for all of them
+mean.r.sd <- mean(c(sd(Jahan.r.BRBR), sd(Tag.r.LYER)))
+# visualize prior
+hist(rnorm(1000, mean = mean.r.sd, sd = 0.5))
+prior.random.effects <- "normal(0.03, 0.5)"
+
+# I don't have a great sense for the growth rate of the parasitoid, other than that it should be negative
+# this seems like a reasonable starting point
+
+# visualize prior
+hist(rnorm(1000, mean = -1.5, sd = 1))
+prior.r.Ptoid <- "normal(-1.5, 1)"
+```
+
+### Intra- and interspecific interactions
+
+I assume they are weak, i.e. much less than $|1|$. I also assume that all species exhibit intraspecific competition, aphids have negative interspecific effects with each other, but positive interspecific effects on the parasitoid. I also assume parasitoids have negative interspecific effects on the aphids.
+
+```{r interaction-priors}
+## intraspecific, 0 = no density dependence. this occurs because of offset in model.
+# visualize prior
+hist(rnorm(1000, mean = -0.1, sd = 0.5))
+prior.intra.BRBR <- "normal(-0.1, 0.5)"
+prior.intra.LYER <- "normal(-0.1, 0.5)"
+prior.intra.Ptoid <- "normal(-0.1, 0.5)"
+
+## negative interspecific, 0 = no interaction
+# visualize prior
+hist(rnorm(1000, mean = -0.1, sd = 0.5))
+# most of these values are less than 1, which
+# is indicative of saturating effects
+prior.LYERonBRBR <- "normal(-0.1, 0.5)" 
+prior.PtoidonBRBR <- "normal(-0.1, 0.5)"
+prior.BRBRonLYER <- "normal(-0.1, 0.5)"
+prior.PtoidonLYER <- "normal(-0.1, 0.5)"
+
+## positive interspecific
+# visualize prior
+hist(rnorm(1000, mean = 0.1, sd = 0.5))
+# most of these values are less than 1, which
+# is indicative of saturating effects
+prior.BRBRonPtoid <- "normal(0.1, 0.5)"
+prior.LYERonPtoid <- "normal(0.1, 0.5)"
+```
+
+### AOP2 effects
+
+It was unclear to me *a priori* exactly how allelic differences at *AOP2* would affect species' growth rates or intra- and interspecific interactions. Therefore, I assumed these effects on specific rates could be positive or negative, but would likely be between -1 and 1 (i.e., not ridiculously large).
+
+```{r rich-priors}
+prior.rich <- "normal(0, 0.5)"
+```
+
+Note that in a previous version of this analysis I assessed the effects of genetic diversity, which is why this is called `prior.rich`. The prior remains the same though, as including both *AOP2*$-$ and *AOP2*$+$ in the same model corresponds to the effect of genetic diversity (i.e. average effect of adding one genotype to the population).
+
+### Temperature effects
+
+As with *AOP2* it was unclear to me *a priori* how warming would affect species' growth rates or intra- and interspecific interactions; therefore, I used the same prior as for *AOP2*.
+
+```{r temp-priors}
+prior.temp <- "normal(0, 0.5)"
+```
+
+### Biomass effects
+
+For both aphids, I thought that increasing biomass would increase their intrinsic growth rates, but only weakly, because I didn't expect biomass to be limiting. 
+
+```{r aphid-biomass-priors}
+# visualize prior
+hist(rnorm(1000, mean = 0.1, sd = 0.5))
+prior.AphidBiomass <- "normal(0.1, 0.5)"
+```
+
+For the parasitoid, it was unclear to me whether increasing biomass would have positive or negative effects. I could imagine both, as increasing biomass may increase the search effort of parasitoids, resulting in a negative effect on their growth rate. Alternatively, more biomass may increase the quality of aphids, which could increase the parasitoid's growth rate. Therefore, I specified a normal prior with mean = 0 and SD = 0.5, so that most of the distribution lied between -1 and 1 (i.e. saturating negative or positive effects).
+
+```{r ptoid-biomass-prior}
+# visualize prior
+hist(rnorm(1000, mean = 0, sd = 0.5))
+prior.PtoidBiomass <- "normal(0, 0.5)"
+```
+
+## Analysis
+
+I first fit a complete model with *AOP2*$-$ (`aop2_genotypes`), *AOP2*$+$ (`AOP2_genotypes`), and temperature (`temp`) effects.
+
+```{r full-mv-norm-brm}
+full.mv.norm.brm <- brm(
+  data = full_df,
+  formula = mvbf(full.mv.norm.BRBR.bf, full.mv.norm.LYER.bf, full.mv.norm.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/full.mv.norm.brm.keystone.rds") 
+
+# print summary
+summary(full.mv.norm.brm)
+```
+
+## Inspect credible intervals
+
+Below, I inspect which parameters may be safely omitted from the model. It seemed reasonable that if 90% of the posterior probability distribution of the parameter included zero, then I could safely drop it from the model. Therefore, I proceeded with this criteria, starting with the highest-order terms:
+
+```{r full-mv-norm-highest-order}
+# higher-order temperature effects
+bayesplot::mcmc_intervals(full.mv.norm.brm, regex_pars = "_t:temp$", prob = 0.66, prob_outer = 0.90) # suggests dropping all, but temp effect on reciprocoal BRBR-Ptoid interaction
+
+# higher-order aop2 effects
+bayesplot::mcmc_intervals(full.mv.norm.brm, regex_pars = "_t:aop2_genotypes$", prob = 0.66, prob_outer = 0.90) # suggests dropping all but AOP2- effects on Ptoid interactions with LYER and BRBR.
+
+# check biomass effects
+bayesplot::mcmc_intervals(full.mv.norm.brm, regex_pars = "_logBiomass_g_t1$", prob = 0.66, prob_outer = 0.90) # drop biomass effect on BRBR and LYER
+
+# other terms currently have higher-order effects with temp and AOP2 present, 
+# need to drop these higher-order terms before examining these main effects
+```
+
+I focus on `aop2_genotypes` effects, but I make sure to always include `AOP2_genotypes` in the model. That way, I'm estimating the effect of genotypes with null *AOP2*$-$ allele after controlling for the effect of genotypes with a functional *AOP2*$+$ allele.
+
+Let's check how the full model does in reproducing the observed effects of the null *AOP2*$-$ in increasing LYER-Ptoid persistence.
+
+```{r warning=F}
+pp_aop2_LP_persist(full.mv.norm.brm)
+```
+
+`aop2_LPbound_BayesP` calculates the percentage of posterior samples where the null *AOP2*$-$ allele increases LYER-Ptoid persistence relative to the functional *AOP2*$+$ allele (as inferred by an increase in its normalized angle). `aop2_LPbound_effect` calculates the change in the normalized angle from the LYER-Ptoid feasibility boundary for *AOP2*$-$ relative to *AOP2*$+$. As you can see, the full model is unable to reproduce the observed effects of the null *AOP2*$-$ allele in increasing LYER-Ptoid persistence.
+
+# Model selection
+
+## Reduced model 1
+
+### Drop terms
+
+Based on the above plots, I dropped the following higher-order terms:
+
+Effects on **BRBR_t1**:
+
+- `(log1p(LYER_t) + log1p(BRBR_t)):temp`
+- `(log1p(LYER_t) + log1p(BRBR_t)):aop2`
+- `log(Biomass_g_t1)`
+
+Effects on **LYER_t1**:
+
+- `(log1p(LYER_t) + log1p(BRBR_t) + log1p(Ptoid_t)):temp`
+- `(log1p(LYER_t) + log1p(BRBR_t)):aop2`
+- `log(Biomass_g_t1)`
+
+Effects on **Ptoid_t1**
+
+- `(log1p(LYER_t) + log1p(Ptoid_t)):temp`
+- `(log1p(LYER_t) + log1p(BRBR_t) + log1p(Ptoid_t)):aop2` 
+
+### Refit model
+
+```{r reduced-1-brm}
+# update formulas
+reduced.1.BRBR.bf <- update(full.mv.norm.BRBR.bf, .~. 
+                            -(log1p(LYER_t) + log1p(BRBR_t)):aop2_genotypes 
+                            -(log1p(LYER_t) + log1p(BRBR_t)):AOP2_genotypes 
+                            -(log1p(LYER_t) + log1p(BRBR_t)):temp
+                            -log(Biomass_g_t1))
+reduced.1.LYER.bf <- update(full.mv.norm.LYER.bf, .~. 
+                            -(log1p(LYER_t) + log1p(BRBR_t) + log1p(Ptoid_t)):temp 
+                            -(log1p(LYER_t) + log1p(BRBR_t)):aop2_genotypes 
+                            -(log1p(LYER_t) + log1p(BRBR_t)):AOP2_genotypes
+                            -log(Biomass_g_t1))
+reduced.1.Ptoid.bf <- update(full.mv.norm.Ptoid.bf, .~. 
+                             -(log1p(LYER_t) + log1p(Ptoid_t)):temp 
+                             -(log1p(LYER_t) + log1p(BRBR_t) + log1p(Ptoid_t)):aop2_genotypes 
+                             -(log1p(LYER_t) + log1p(BRBR_t) + log1p(Ptoid_t)):AOP2_genotypes)
+
+# fit update model
+reduced.1.brm <- brm(
+  data = full_df,
+  formula = mvbf(reduced.1.BRBR.bf, reduced.1.LYER.bf, reduced.1.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/reduced.1.brm.keystone.rds") 
+
+# print model summary
+summary(reduced.1.brm)
+```
+
+### Inspect credible intervals
+
+```{r reduced-1-highest-order}
+# higher-order temperature effects
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_t:temp$", prob = 0.66, prob_outer = 0.90) # retain these higher-order effects
+
+# higher-order aop2 effects
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_t:aop2_genotypes$", prob = 0.66, prob_outer = 0.90) 
+
+# lower-order temp effects
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_temp$", prob = 0.66, prob_outer = 0.90) # drop temp on LYER as there are no higher-order terms
+
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_aop2_genotypes$", prob = 0.66, prob_outer = 0.90) # retain all, because of higher-order terms for BRBR and LYER
+
+# check biomass effects
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_logBiomass_g_t1$", prob = 0.66, prob_outer = 0.90)
+
+# check other interaction terms
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_log1pPtoid_t$", prob = 0.80, prob_outer = 0.90) # drop intraspecific effect of Ptoid
+
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_log1pLYER_t$", prob = 0.80, prob_outer = 0.90) # drop LYER effect on BRBR
+
+bayesplot::mcmc_intervals(reduced.1.brm, regex_pars = "_log1pBRBR_t$", prob = 0.80, prob_outer = 0.90) # drop intraspecific effect of BRBR
+```
+
+Since there are still terms to drop based on my 90% criteria, Reduced model 1 is an intermediate model that I don't use in my model comparison.
+
+## Reduced model 2
+
+### Drop terms
+
+Based on the above plots, I dropped the following terms:
+
+Effects on **BRBR_t1**:
+
+- `log1p(BRBR_t)`
+- `log1p(LYER_t)`
+
+Effects on **LYER_t1**:
+
+- `temp`
+
+Effects on **Ptoid_t1**:
+
+- `log1p(Ptoid_t)`
+
+### Refit model
+
+```{r reduced-2-brm}
+# update formulas
+reduced.2.BRBR.bf <- update(reduced.1.BRBR.bf, .~. -log1p(BRBR_t) -log1p(LYER_t)) 
+reduced.2.LYER.bf <- update(reduced.1.LYER.bf, .~. -temp)
+reduced.2.Ptoid.bf <- update(reduced.1.Ptoid.bf, .~. -log1p(Ptoid_t)) 
+
+# fit new model
+reduced.2.brm <- brm(
+  data = full_df,
+  formula = mvbf(reduced.2.BRBR.bf, reduced.2.LYER.bf, reduced.2.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            #set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            #set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            #set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/reduced.2.brm.keystone.rds") 
+
+# print model summary
+summary(reduced.2.brm)
+```
+
+### Inspect credible intervals
+
+```{r reduced-2-plots, warning=F}
+# higher-order aop2 effects
+bayesplot::mcmc_intervals(reduced.2.brm, regex_pars = "_t:aop2_genotypes$", prob = 0.66, prob_outer = 0.90) 
+
+# note that one of these intervals doesn't quite meet our 90% criteria and is right on the edge.
+broom.mixed::tidy(reduced.2.brm, parameters = "b_log1pLYERt1_log1pPtoid_t:aop2_genotypes", conf.level = 0.90)
+# but since the 90% interval is admittedly a bit arbitrary, we can explore effect effect of retaining all terms in this model.
+
+bayesplot::mcmc_intervals(reduced.2.brm, regex_pars = "_aop2_genotypes$", prob = 0.66, prob_outer = 0.90) # retain all because of presence of higher-order terms
+```
+
+Now let's check how well the model performed in capturing the effect of *AOP2$-$* on LYER-Ptoid persistence.
+
+```{r warning=F}
+pp_aop2_LP_persist(reduced.2.brm, temp.cond = 1.5, aop2.cond = 2)
+```
+
+Only 73% of the posterior samples support a positive effect of *AOP2$-$* relative to *AOP2$+$* on LYER-Ptoid persistence. Note that we are still on our way to identify a model based on the 90% cutoff, but I show it above to show that this model still doesn't appear to adequately capture the effect of AOP2.
+
+## Reduced model 3
+
+### Drop terms
+
+Based on the above plots, we will drop the following term:
+
+Effects on **BRBR_t1**:
+
+- keep all
+
+Effects on **LYER_t1**:
+
+- `log1p(Ptoid_t):aop2_genotypes`
+
+Effects on **Ptoid_t1**:
+
+- keep all
+
+### Refit model
+
+```{r reduced-3-brm}
+# update formulas
+reduced.3.BRBR.bf <- reduced.2.BRBR.bf 
+reduced.3.LYER.bf <- update(reduced.2.LYER.bf, .~. -log1p(Ptoid_t):aop2_genotypes -log1p(Ptoid_t):AOP2_genotypes)
+reduced.3.Ptoid.bf <- reduced.2.Ptoid.bf 
+
+# fit new model
+reduced.3.brm <- brm(
+  data = full_df,
+  formula = mvbf(reduced.3.BRBR.bf, reduced.3.LYER.bf, reduced.3.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            #set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            #set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            #set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/reduced.3.brm.keystone.rds") 
+
+# print model summary
+summary(reduced.3.brm)
+```
+
+### Inspect credible intervals
+
+```{r reduced-3-summary}
+# check highest-order aop2 effects
+bayesplot::mcmc_intervals(reduced.3.brm, regex_pars = "_t:aop2_genotypes$", prob = 0.66, prob_outer = 0.90) # now it appears we should drop the Ptoid:aop2 effect on BRBR.
+```
+
+This is still an intermediate model because not all terms meet our 90% criteria.
+
+## Reduced model 4
+
+### Drop terms
+
+Based on the above plots, I dropped the following terms:
+
+Effects on **BRBR_t1**:
+
+- `log1p(Ptoid_t):aop2_genotypes`
+
+Effects on **LYER_t1**:
+
+- keep all
+
+Effects on **Ptoid_t1**:
+
+- keep all
+
+### Refit model
+
+```{r reduced-4-brm}
+# update formulas
+reduced.4.BRBR.bf <- update(reduced.3.BRBR.bf, .~. -log1p(Ptoid_t):aop2_genotypes -log1p(Ptoid_t):AOP2_genotypes)
+reduced.4.LYER.bf <- reduced.3.LYER.bf
+reduced.4.Ptoid.bf <- reduced.3.Ptoid.bf 
+
+# fit new model
+reduced.4.brm <- brm(
+  data = full_df,
+  formula = mvbf(reduced.4.BRBR.bf, reduced.4.LYER.bf, reduced.4.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            #set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            #set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            #set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/reduced.4.brm.keystone.rds") 
+
+# print model summary
+summary(reduced.4.brm)
+```
+
+### Inspect credible intervals
+
+```{r reduced-4-summary}
+# check aop2 effects on growth rates
+bayesplot::mcmc_intervals(reduced.4.brm, regex_pars = "_aop2_genotypes$", prob = 0.66, prob_outer = 0.90) # drop aop2 effect on BRBR
+```
+
+Again, this model is still an intermediate one because not all terms meet the 90% criteria.
+
+## Reduced model 5
+
+### Drop terms
+
+Based on the above plots, I dropped the following terms:
+
+Effects on **BRBR_t1**:
+
+- `aop2_genotypes`
+
+Effects on **LYER_t1**:
+
+- keep all
+
+Effects on **Ptoid_t1**:
+
+- keep all
+
+### Refit model
+
+```{r reduced-5-brm}
+# update formulas
+reduced.5.BRBR.bf <- update(reduced.4.BRBR.bf, .~. -aop2_genotypes -AOP2_genotypes)
+reduced.5.LYER.bf <- reduced.4.LYER.bf
+reduced.5.Ptoid.bf <- reduced.4.Ptoid.bf 
+
+# fit new model
+reduced.5.brm <- brm(
+  data = full_df,
+  formula = mvbf(reduced.5.BRBR.bf, reduced.5.LYER.bf, reduced.5.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            #set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            #set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            #set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            #set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            #set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/reduced.5.brm.keystone.rds") 
+
+# print model summary
+summary(reduced.5.brm)
+```
+
+### Inspect credible intervals
+
+```{r reduced-5-summary}
+# no more higher-order terms, so check aop2 effects on growth rates
+bayesplot::mcmc_intervals(reduced.5.brm, regex_pars = "_aop2_genotypes$", prob = 0.66, prob_outer = 0.90) 
+```
+
+Now, we have a model where all terms meet our 90% criteria. Let's evaluate it's effect on LYER-Ptoid persistence.
+
+```{r warning=F}
+pp_aop2_LP_persist(reduced.5.brm, temp.cond = 1.5, aop2.cond = 2)
+```
+
+There is clear evidence that *AOP2$-$* promotes LYER-Ptoid persistence relative to *AOP2$+$* in this model.
+
+## Reduced model 6
+
+What about a model where we use a 95% cutoff?
+
+```{r}
+bayesplot::mcmc_intervals(reduced.5.brm, regex_pars = "_aop2_genotypes$", prob = 0.66, prob_outer = 0.95) # suggest dropping aop2 effect on Ptoid.
+```
+
+### Drop terms
+
+Based on the above plots, I dropped the following terms:
+
+Effects on **BRBR_t1**:
+
+- keep all
+
+Effects on **LYER_t1**:
+
+- keep all
+
+Effects on **Ptoid_t1**:
+
+- `aop2_genotypes`
+
+### Refit model
+
+```{r reduced-6-brm}
+# update formulas
+reduced.6.BRBR.bf <- reduced.5.BRBR.bf
+reduced.6.LYER.bf <- reduced.5.LYER.bf
+reduced.6.Ptoid.bf <- update(reduced.5.Ptoid.bf, .~. -aop2_genotypes -AOP2_genotypes) 
+
+# fit new model
+reduced.6.brm <- brm(
+  data = full_df,
+  formula = mvbf(reduced.6.BRBR.bf, reduced.6.LYER.bf, reduced.6.Ptoid.bf),
+  iter = 4000,
+  prior = c(# growth rates
+            set_prior(prior.r.BRBR, class = "b", coef = "intercept", resp = "log1pBRBRt1"),
+            set_prior(prior.r.LYER, class = "b", coef = "intercept", resp = "log1pLYERt1"),
+            set_prior(prior.r.Ptoid, class = "b", coef = "intercept", resp = "log1pPtoidt1"),
+            # intraspecific effects
+            #set_prior(prior.intra.BRBR, class = "b", coef = "log1pBRBR_t", resp = "log1pBRBRt1"),
+            set_prior(prior.intra.LYER, class = "b", coef = "log1pLYER_t", resp = "log1pLYERt1"),
+            #set_prior(prior.intra.LYER, class = "b", coef = "log1pPtoid_t", resp = "log1pPtoidt1"),
+            # negative interspecific effects
+            #set_prior(prior.LYERonBRBR, class = "b", coef = "log1pLYER_t", resp = "log1pBRBRt1"),
+            set_prior(prior.BRBRonLYER, class = "b", coef = "log1pBRBR_t", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidonBRBR, class = "b", coef = "log1pPtoid_t", resp = "log1pBRBRt1"),
+            set_prior(prior.PtoidonLYER, class = "b", coef = "log1pPtoid_t", resp = "log1pLYERt1"),
+            # positive interspecific effects
+            set_prior(prior.BRBRonPtoid, class = "b", coef = "log1pBRBR_t", resp = "log1pPtoidt1"),
+            set_prior(prior.LYERonPtoid, class = "b", coef = "log1pLYER_t", resp = "log1pPtoidt1"),
+            # aop2 effects
+            #set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "aop2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:aop2_genotypes", resp = "log1pPtoidt1"),
+            # AOP2 effects
+            #set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pBRBRt1"),
+            set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "AOP2_genotypes", resp = "log1pPtoidt1"),  
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pBRBR_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pLYER_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pBRBRt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pLYERt1"),
+            #set_prior(prior.rich, class = "b", coef = "log1pPtoid_t:AOP2_genotypes", resp = "log1pPtoidt1"),
+            # temp effects
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "temp", resp = "log1pPtoidt1"),  
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pLYERt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pBRBR_t:temp", resp = "log1pPtoidt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pLYER_t:temp", resp = "log1pPtoidt1"),
+            set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pBRBRt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pLYERt1"),
+            #set_prior(prior.temp, class = "b", coef = "log1pPtoid_t:temp", resp = "log1pPtoidt1"),
+            # biomass effects
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pBRBRt1"),
+            #set_prior(prior.AphidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pLYERt1"),
+            set_prior(prior.PtoidBiomass, class = "b", coef = "logBiomass_g_t1", resp = "log1pPtoidt1"),
+            # random effects
+            set_prior(prior.random.effects, class = "sd", resp = "log1pBRBRt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pLYERt1"),
+            set_prior(prior.random.effects, class = "sd", resp = "log1pPtoidt1")),
+  file = "output/reduced.6.brm.keystone.rds") 
+
+# print model summary
+summary(reduced.6.brm)
+```
+
+### Inspect credible intervals
+
+```{r reduced-6-summary}
+# confirm aop2 effects on growth rates
+bayesplot::mcmc_intervals(reduced.6.brm, regex_pars = "_aop2_genotypes$", prob = 0.66, prob_outer = 0.90) 
+```
+
+Check effect of *AOP2$-$*.
+
+```{r warning=F}
+pp_aop2_LP_persist(reduced.6.brm, temp.cond = 1.5, aop2.cond = 2)
+```
+
+The effect size is cut in half and the probability of this positive effect decreases slightly. In my mind, this indicates that it's a bit worse than the 90% cutoff model in reproducing our observed data. Still, it also points to the fact that the effect of null *AOP2*$-$ allele on LYER growth rates is the primary driver.
+
+# Structural stability of dominant food chain
+
+Although we already identified which model is most approrpriate, now we are going to delve deeper into the specific effects.
+
+```{r}
+aop2.brm <- reduced.5.brm
+```
+
+## Reproduce Fig. 4
+
+Since our observational data indicated clear effects of *AOP2* gene on the persistence of the LYER-Ptoid subcommunity, I restrict our subsequent analysis to this effect (i.e. no temperature).
+
+Note that I did not specify an effect of *AOP2* on the intra- or interspecific interactions in LYER or Ptoid. Therefore, the interaction matrix is the same for both *AOP2*$-$ and *AOP2*$+$.
+
+Also, I did this comparison at an imaginary midpoint of temperature, i.e. `temp = 1.5`. In this food chain, temperature only had a clear effect on the parasitoid's intrinsic growth rate, so I only add the temperature effect here.
+
+
+```{r rich-mean-estimates}
+coef.aop2 <- fixef(aop2.brm)[,"Estimate"]
+
+# value of rich to condition
+temp.cond <- 1.5 # 1.5 = 21.5 C
+# I chose 1.5 to condition on
+# an imaginary average between temperature treatments
+# note that setting it to zero, represents temp = 20 C
+
+# interaction matrix for all levels of aop2
+aop2.mat <- matrix(c(coef.aop2["log1pLYERt1_log1pLYER_t"], 
+                      coef.aop2["log1pLYERt1_log1pPtoid_t"],
+                      coef.aop2["log1pPtoidt1_log1pLYER_t"], 
+                      0), # set to zero because there was no clear evidence for intraspecific Ptoid effect
+                    ncol = 2, byrow = TRUE)
+aop2.mat
+AOP2.mat <- aop2.mat
+
+# growth rates with aop2 allele (both genotypes)
+aop2.IGR <- matrix(c(coef.aop2["log1pLYERt1_intercept"] + coef.aop2["log1pLYERt1_aop2_genotypes"]*2,
+                      coef.aop2["log1pPtoidt1_intercept"] + coef.aop2["log1pPtoidt1_aop2_genotypes"]*2 + coef.aop2["log1pPtoidt1_temp"]*temp.cond),
+                    ncol = 1)
+aop2.IGR
+
+# growth rates with AOP2 allele (both genotypes)
+AOP2.IGR <- matrix(c(coef.aop2["log1pLYERt1_intercept"] + coef.aop2["log1pLYERt1_AOP2_genotypes"]*2,
+                      coef.aop2["log1pPtoidt1_intercept"] + coef.aop2["log1pPtoidt1_AOP2_genotypes"]*2 + coef.aop2["log1pPtoidt1_temp"]*temp.cond), 
+                    ncol = 1)
+AOP2.IGR
+```
+
+Plot the effect of *AOP2* gene on structural stability.
+
+```{r aop2-feasibility-domain}
+# get raw data for manually making plot
+get_FD.2sp <- FeasibilityDomain2sp(A = list(aop2.mat, AOP2.mat),
+                     r = list(aop2.IGR, AOP2.IGR),
+                     labels = c("aop2", "AOP2"),
+                     normalize = TRUE) %>%
+  rename(aop2 = A_ID) 
+
+# Draw polygon for feasibility domain
+# from: https://stackoverflow.com/questions/12794596/how-fill-part-of-a-circle-using-ggplot2
+# define the circle; add a point at the center if the 'pie slice' if the shape is to be filled
+circleFun <- function(center=c(0,0), diameter=1, npoints=100, start=0, end=2, filled=TRUE){
+  tt <- seq(start*pi, end*pi, length.out=npoints)
+  df <- data.frame(
+    x = center[1] + diameter / 2 * cos(tt),
+    y = center[2] + diameter / 2 * sin(tt)
+  )
+  if(filled==TRUE) { #add a point at the center so the whole 'pie slice' is filled
+    df <- rbind(df, center)
+  }
+  return(df)
+}
+
+# new version
+alpha_level <- 0.01
+ggplot(filter(get_FD.2sp, Type == "r"), aes(x = Sp_1, y = Sp_2)) + 
+  # draw intrinsic growth rate vectors
+  geom_segment(aes(x = 0, y = 0, xend = Sp_1, yend = Sp_2, color = aop2), 
+               arrow = arrow(type = 'open', length = unit(0.1,"cm"))) +
+  # draw critical boundary (remove for final plot after adjusting geom_polygon)
+  geom_segment(data = filter(get_FD.2sp, Type == "A")[1,], # just need one lower bound
+               aes(x = 0, y = 0, xend = Sp_1, yend = Sp_2, linetype = "Critical\nboundary"),
+               color = "black",
+               size = 0.5) + 
+  xlab("Aphid growth rate (normalized)") + 
+  ylab("Parasitoid growth rate (normalized)") +
+  # illustrate circular nature of feasibility domain
+  coord_cartesian(xlim = c(0,1), ylim = c(0.0,-0.75), expand = F) + 
+  # make alpha very low for final plot to provide better looking arrows with keynote
+  # scale_alpha_manual(values = c(alpha_level, alpha_level), labels = c("AOP2\u2013","AOP2+"), name = "") +
+  # adjusted until critical boundary was correct, then removed critical boundary for final plot
+  geom_polygon(data=circleFun(c(0,0), diameter = 2, start=0, end=-0.156, npoints=100, filled=TRUE), 
+               aes(x,y), alpha = 0.1, inherit.aes = F) +
+  theme_cowplot(font_size = 18, line_size = 1)
+# changes for final version
+# alpha = aop2 in geom_segment(aes())
+# uncomment scale_alpha_manual
+# remove dotted line for critical boundary
+# ggsave("figures/keystone-structural-stability-forkeynote.pdf", width = 8, height = 8, units = "in")
+```
+
+I then used Keynote to manually add images and text to create the final version presented in Figure 4 of the main text.
+
+And just as a quick check, the above plot suggests that the community is only feasible (all three species have positive abundances at equilibrium) when the plant population has both genotypes with *AOP2*$-$ allele, which is true:
+
+```{r}
+-inv(aop2.mat) %*% aop2.IGR
+-inv(AOP2.mat) %*% AOP2.IGR 
+```
+
+## Non-equilibrium simulation (Fig. S5)
+
+The above plot illustrates the effect of *AOP2* on the structural stability of the equilibrium abundances of species. I can explore whether our results hold in a non-equilibrium scenario that better characterizes our observational data.
+
+To do this, I look at the the effect of *AOP2* across a range of initial conditions for the abundances of LYER and Ptoid. I get this data by simulating community dynamics with the observed effects of *AOP2* across a range of initial conditions. I restricted our simulation to 10 time steps, as BRBR went extinct commonly at week 7 (experiment was 17 weeks long). I also set an extinction threshold of 2 individuals.
+
+```{r nonequilibrium-sim}
+LP_duration <- 10
+LP_threshold <- log(2) # set threshold of two individuals in the populations
+res <- 0.1
+LP_test_df <- expand.grid(LYER = seq(1, 6, by = res), Ptoid = seq(1, 6, by = res))
+
+## simulate population dynamics and determine which species goes extinct
+
+# aop2
+FE_LP_aop2 <- list()
+for(i in 1:length(LP_test_df$LYER)){
+  FE_LP_aop2[[i]] <- first_extinction_2sp(Initial.States = c(LYER = LP_test_df[i,"LYER"], Ptoid = LP_test_df[i,"Ptoid"]), 
+                                          Interaction.Matrix = aop2.mat + diag(2), 
+                                          IGR.Vector = aop2.IGR, 
+                                          Duration = LP_duration, 
+                                          threshold = LP_threshold)
+}
+FE_LP_aop2_df <- bind_cols(LP_test_df, plyr::ldply(FE_LP_aop2)) %>%
+  mutate(allele = "aop2")
+
+# AOP2
+FE_LP_AOP2 <- list()
+for(i in 1:length(LP_test_df$LYER)){
+  FE_LP_AOP2[[i]] <- first_extinction_2sp(Initial.States = c(LYER = LP_test_df[i,"LYER"], Ptoid = LP_test_df[i,"Ptoid"]), 
+                                           Interaction.Matrix = AOP2.mat + diag(2), 
+                                           IGR.Vector = AOP2.IGR, 
+                                           Duration = LP_duration, 
+                                           threshold = LP_threshold)
+}
+FE_LP_AOP2_df <- bind_cols(LP_test_df, plyr::ldply(FE_LP_AOP2)) %>%
+  mutate(allele = "AOP2")
+
+# get observed data on initial abundances of LYER and Ptoid after BRBR went extinct
+LP_actual_df <- timeseries_df %>%
+  filter(BRBR_t == 0, LYER_t > 0, Ptoid_t > 0) %>%
+  group_by(Cage) %>% # rich, 
+  summarise_at(vars(LYER_t, Ptoid_t), list(first = first)) %>%
+  ungroup() %>%
+  mutate(#rich = rich + 1, 
+         log1p_LYER_t_first = log1p(LYER_t_first),
+         log1p_Ptoid_t_first = log1p(Ptoid_t_first)) %>%
+  as.data.frame()
+```
+
+The graph below shows a couple of useful things. First, our predictions hold for outside of equilibrium. That is, there is a greater likelihood of LYER-Ptoid persistence when there are genotypes with the null *AOP2*$-$ allele in the population. 
+
+It's also important to note that there is a region of parameter space where LYER goes extinct before Ptoid, which would eventually lead to the collapse of the Ptoid since it has lost its resource. This is not possible if I were to assume the community is at equilibrium.
+
+```{r nonequilibrium-plot, warning=FALSE}
+cbPalette <-  viridis::viridis(4)
+
+bind_rows(FE_LP_aop2_df, FE_LP_AOP2_df) %>%
+  mutate(allele = factor(allele, labels = c("AOP2\u2013","AOP2+"))) %>%
+  mutate(species = ifelse(is.na(species) == T, "Food chain persists", species),
+         fspecies = factor(species, levels = c("LYER","Ptoid","Food chain persists"), labels = c("Complete collapse","Aphid only","Food chain persists"))) %>%
+  ggplot(., aes(x = LYER, y = Ptoid, fill = fspecies)) + # fspecies
+  geom_tile() +
+  facet_grid(~allele) +
+  scale_fill_manual(name = "Critical transition", values = cbPalette[1:3]) + 
+  coord_cartesian(xlim = c(1, max(LP_actual_df$log1p_LYER_t_first)), 
+                  ylim = c(1, max(LP_actual_df$log1p_Ptoid_t_first))) +
+  xlab("Aphid initial abundance (log scale)") +
+  ylab("Parasitoid initial abundance (log scale)") +
+  theme_cowplot() +
+  theme(strip.background = element_blank()) 
+# ggsave(filename = "figures/MAR1-nonequilibrium-foodchain-AOP2.pdf", width = 6, height = 5, device=cairo_pdf)
+```
+
+Remember though that our real communities are also stochastic, which is something I did not include in this non-equilibrium simulation. Below, I explicitly address stochasticity by estimating the uncertainty in our observed "mean" effects of *AOP2* on structural stability.
+
+## Posterior estimates (Fig. S4)
+
+The above is a nice visualization of the central tendency, but it doesn't illustrate the uncertainty in the effect of *AOP2* on structural stability. To get at this, I need to use the posterior samples from our model.
+
+```{r aop2-posterior-stability, warning=F}
+# note that this is virtually the same code in AOP2-LYER-Ptoid-persistence.R, but I detail
+# it here for transparency and plotting.
+
+# get posterior predictions
+pp.aop2_model <- posterior_samples(aop2.brm, pars = "^b")
+
+# calculate structural stability when aop2 = 2
+aop2_stability <- apply(
+  pp.aop2_model, 
+  MARGIN = 1, 
+  FUN = function(x) { 
+    tmp.mat = matrix(c(x["b_log1pLYERt1_log1pLYER_t"], x["b_log1pLYERt1_log1pPtoid_t"],
+                       x["b_log1pPtoidt1_log1pLYER_t"], 0), 
+                     ncol = 2, byrow = TRUE)
+    tmp.r = matrix(c(x["b_log1pLYERt1_intercept"] + x["b_log1pLYERt1_aop2_genotypes"]*2,
+                     x["b_log1pPtoidt1_intercept"] + x["b_log1pPtoidt1_aop2_genotypes"]*2 + x["b_log1pPtoidt1_temp"]*temp.cond),
+                   ncol = 1)
+    FeasibilityBoundaryLYER.Ptoid = as.numeric(BoundaryLYER.Ptoid(tmp.mat, tmp.r)["boundary"])
+    c(FeasibilityBoundaryLYER.Ptoid = FeasibilityBoundaryLYER.Ptoid)
+  })
+aop2_stability.df <- data.frame(
+  allele = "aop2",
+  posterior_sample = 1:nrow(pp.aop2_model),
+  FeasibilityBoundaryLYER.Ptoid = aop2_stability
+)
+
+# calculate structural stability when rich = 2
+AOP2_stability <- apply(
+  pp.aop2_model, 
+  MARGIN = 1, 
+  FUN = function(x) { 
+    tmp.mat = matrix(c(x["b_log1pLYERt1_log1pLYER_t"], x["b_log1pLYERt1_log1pPtoid_t"],
+                       x["b_log1pPtoidt1_log1pLYER_t"], 0), 
+                     ncol = 2, byrow = TRUE)
+    tmp.r = matrix(c(x["b_log1pLYERt1_intercept"] + x["b_log1pLYERt1_AOP2_genotypes"]*2,
+                     x["b_log1pPtoidt1_intercept"] + x["b_log1pPtoidt1_AOP2_genotypes"]*2 + x["b_log1pPtoidt1_temp"]*temp.cond),
+                   ncol = 1)
+    FeasibilityBoundaryLYER.Ptoid = as.numeric(BoundaryLYER.Ptoid(tmp.mat, tmp.r)["boundary"]) 
+    c(FeasibilityBoundaryLYER.Ptoid = FeasibilityBoundaryLYER.Ptoid)
+  })
+AOP2_stability.df <- data.frame(
+  allele = "AOP2",
+  posterior_sample = 1:nrow(pp.aop2_model),
+  FeasibilityBoundaryLYER.Ptoid = AOP2_stability
+)
+
+# combine data
+all.aop2_stability.df <- bind_rows(aop2_stability.df, AOP2_stability.df)
+```
+
+## Reproduce Fig. S4
+
+```{r}
+# subsample 1/8 of the posterior to make it easier to visualize
+set.seed(38)
+rsamp <- sample(1:8000, size = 1000)
+
+# plot
+all.aop2_stability.df %>%
+  filter(posterior_sample %in% rsamp) %>%
+  mutate(n.allele = as.numeric(as.factor(allele))) %>%
+  ggplot(., aes(x = n.allele, y = FeasibilityBoundaryLYER.Ptoid)) +
+  geom_line(aes(group = posterior_sample), alpha = 0.1) +
+  stat_summary(fun.y = mean, geom = "line", color = "firebrick1", size = 1) +
+  stat_summary(fun.y = mean, geom = "point", color = "firebrick1", size = 1.5) +
+  theme_minimal_hgrid() +
+  scale_x_continuous(name = "Allele", breaks = c(1,2), labels = c("AOP2\u2013", "AOP2+"), expand = c(0.1,0.1)) +
+  ylab("Normalized angle from critical boundary") 
+# ggsave(filename = "figures/MAR1-posterior-foodchain-AOP2.pdf", width = 6, height = 5, device=cairo_pdf)
+```
+
+Calculate the percentage of posterior estimates where genetic diversity increased the structural stability of the community.
+
+```{r}
+# organize data
+aop2_LPbound <- all.aop2_stability.df %>%
+  select(allele, posterior_sample, FeasibilityBoundaryLYER.Ptoid) %>%
+  spread(allele, FeasibilityBoundaryLYER.Ptoid) %>%
+  mutate(allele_effect = `aop2` - `AOP2`)
+
+# calculate percentage
+mean(aop2_LPbound$allele_effect > 0)
+
+# calculate effect size
+mean(aop2_LPbound$allele_effect)
+```
+
+```{r warning=F}
+# note that this was all done in
+pp_aop2_LP_persist(aop2.brm)
+# but I broke it down to facilitate transparency and for plotting
+```
+
+
+Let's look at the effect of *AOP2*$-$ on LYER and Ptoid's intrinsic growth rates.
+
+```{r}
+mean(pp.aop2_model$b_log1pLYERt1_aop2_genotypes)
+mean(pp.aop2_model$b_log1pLYERt1_aop2_genotypes > 0)
+
+mean(pp.aop2_model$b_log1pPtoidt1_aop2_genotypes)
+mean(pp.aop2_model$b_log1pPtoidt1_aop2_genotypes > 0)
+```
+
+# Structural stability of initial food web
+
+I use the same model as I did for the effect of *AOP2* `aop2.brm`.
+
+```{r}
+temp_model <- aop2.brm
+```
+
+
+## Reproduce Fig. S1
+
+```{r}
+coef.temp <- fixef(temp_model)[,"Estimate"]
+
+# we don't include AOP2 gene value, so it estimates at zero
+# for both AOP2_genotypes and aop2_genotypes, i.e., an imaginary
+# allele that reflects the intercept.
+temp.cond <- 3
+
+# interaction matrix when temp = 20 C
+temp20.mat <- matrix(c(0, 
+                       0, 
+                       coef.temp["log1pBRBRt1_log1pPtoid_t"],
+                       coef.temp["log1pLYERt1_log1pBRBR_t"],
+                       coef.temp["log1pLYERt1_log1pLYER_t"],
+                       coef.temp["log1pLYERt1_log1pPtoid_t"],
+                       coef.temp["log1pPtoidt1_log1pBRBR_t"],
+                       coef.temp["log1pPtoidt1_log1pLYER_t"], 
+                       0),
+                     ncol = 3, byrow = TRUE)
+
+# growth rates when temp = 20 C
+temp20.IGR <- matrix(c(coef.temp["log1pBRBRt1_intercept"],
+                       coef.temp["log1pLYERt1_intercept"],
+                       coef.temp["log1pPtoidt1_intercept"]),
+                     ncol = 1)
+
+# interaction matrix when temp = 23 C
+temp23.mat <- matrix(c(0, 
+                       0, 
+                       coef.temp["log1pBRBRt1_log1pPtoid_t"] + coef.temp["log1pBRBRt1_log1pPtoid_t:temp"]*temp.cond,
+                       coef.temp["log1pLYERt1_log1pBRBR_t"], 
+                       coef.temp["log1pLYERt1_log1pLYER_t"], 
+                       coef.temp["log1pLYERt1_log1pPtoid_t"],
+                       0,# constrained to biologically reasonable value of zero, rather than negative estimate # coef.temp["log1pPtoidt1_log1pBRBR_t"] + coef.temp["log1pPtoidt1_log1pBRBR_t:temp"]*3,
+                       coef.temp["log1pPtoidt1_log1pLYER_t"], 
+                       0),
+                     ncol = 3, byrow = TRUE)
+
+# growth rates when temp = 23 C
+temp23.IGR <- matrix(c(0.1, # constrained to biological reasonable value of 0.1, rather than negative estimate # coef.temp["log1pBRBRt1_intercept"] + coef.temp["log1pBRBRt1_temp"]*temp.cond,
+                       coef.temp["log1pLYERt1_intercept"],
+                       coef.temp["log1pPtoidt1_intercept"] + coef.temp["log1pPtoidt1_temp"]*temp.cond),
+                     ncol = 1)
+
+# assess feasibility
+-1*inv(temp20.mat) %*% temp20.IGR # all species persist
+-1*inv(temp23.mat) %*% temp23.IGR # BRBR goes extinct
+
+# plot structural stability
+constraints.matrix <- matrix(c(-1,0,0,
+                               0,-1,0,
+                               0,0,1),
+                             ncol = 3, byrow = T)
+PlotFeasibilityDomain3sp(A = list(temp20.mat, temp23.mat, constraints.matrix),
+                         r = list(temp20.IGR, temp23.IGR, temp23.IGR), # IGR doesn't matter for constraints
+                         A.color = c("steelblue","firebrick1","grey"),
+                         r.color = c("steelblue","firebrick1","grey"),
+                         normalize = TRUE,
+                         sphere.alpha = 0,
+                         arc.width = c(2,2,2),
+                         barb.n = 2,
+                         species.labels = c("B","L","P")) 
+# add axes
+rgl.lines(x = c(0,1.1), y = c(0,0), z = c(0,0), color = "black", lwd = 3)
+rgl.lines(x = c(0,0), y = c(1.1,0), z = c(0,0), color = "black", lwd = 3)
+rgl.lines(x = c(0,0), y = c(0,0), z = c(-1.1,0), color = "black", lwd = 3)
+
+# visualize in .html file
+# note that I reproduce this visualization in `code/temperature-structural-stability-fig.R`
+scene3d()
+rglwidget()
+```
+
+From the above figure, it appears that the `L-P` boundary determines the feasibility of the community (`alpha.A23` below). Therefore, I focus on estimating the normalized angle of the intrinsic growth rate from this critical boundary.
+
+```{r}
+# calculate angle from critical boundary L-P for 23 C community
+FeasibilityBoundary(temp23.mat, temp23.IGR)["alpha.A23"] 
+```
+
+```{r include=FALSE}
+# B-L boundary
+FeasibilityBoundary(temp23.mat, temp23.IGR)["alpha.A12"]
+# B-P boundary
+FeasibilityBoundary(temp23.mat, temp23.IGR)["alpha.A13"] # sign is incorrect. this means it's important to check manually check where the sign of the angle was correctly determined. Fortunately, this boundary doesn't determine feasibility.
+
+## Explanation of Fig. S1
+# This suggests that the change in the parasitoid's intrinsic growth rate, increasing with warmer temperatures accelerates the extinction of BRBR. This is because the only two things different about this boundary, from our data, is that the parasitoid's attack rate on BRBR actually decreased with warming. This acts to buffer extinction risk by expanding that part of the feasibility domain. However, the vector of intrinsic growth rate moves dramatically close to this boundary, suggesting the decrease in attack rate is insufficient to buffer the increase in intrinsic growth rate of the parasitoid.
+
+#The expanded `B-P` boundary at 23 C is due to the now zero effect of BRBR on the Ptoid (it is positive at 20 C).
+```
+
+
+## Posterior estimates
+
+```{r}
+# get posterior predictions
+pp.temp_model <- posterior_samples(temp_model, pars = "^b")
+```
+
+Inspect parameter estimates to ensure they are biologically reasonable.
+
+```{r}
+# most BRBR intrinsic growth rates are predicted to become negative with warming,
+# which is not biological realistic. I will constrain these to a small positive value of 0.1
+pp.temp_model %>%
+  mutate(pp_ID = 1:nrow(.),
+         r_BRBR_20 = b_log1pBRBRt1_intercept,
+         r_BRBR_23 = b_log1pBRBRt1_intercept + b_log1pBRBRt1_temp*3) %>%
+  select(pp_ID, r_BRBR_20, r_BRBR_23) %>%
+  gather(key = temp, value = r, -pp_ID) %>%
+  filter(pp_ID %in% rsamp) %>% # subsample to avoid crowding plot
+  ggplot(., aes(x = temp, y = r)) +
+  geom_line(aes(group = pp_ID), alpha = 0.1) +
+  stat_summary(fun.y = mean, geom = "point", col = "red", size = 2) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "red") 
+
+# the effect of BRBR on the parasitoid at warmer temperatures apparently
+# becomes negative quite frequnetly. Rather than setting it to zero, I used a more conservative
+# approach, by constraining the lower bound to zero, allowing positive effects
+# in the posterior samples.
+pp.temp_model %>%
+  mutate(pp_ID = 1:nrow(.),
+         BRBR_Ptoid_20 = b_log1pPtoidt1_log1pBRBR_t,
+         BRBR_Ptoid_23 = b_log1pPtoidt1_log1pBRBR_t + `b_log1pPtoidt1_log1pBRBR_t:temp`*3) %>%
+  select(pp_ID, BRBR_Ptoid_20, BRBR_Ptoid_23) %>%
+  gather(key = temp, value = inter, -pp_ID) %>%
+  filter(pp_ID %in% rsamp) %>% # subsample to avoid crowding plot
+  ggplot(., aes(x = temp, y = inter)) +
+  geom_line(aes(group = pp_ID), alpha = 0.1) +
+  stat_summary(fun.y = mean, geom = "point", col = "red", size = 2) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "red")
+  
+# rarely is the parasitoid's intrinsic growth rate estimated as positive, 
+# althought it should be negative
+pp.temp_model %>%
+  mutate(pp_ID = 1:nrow(.),
+         r_BRBR_20 = b_log1pPtoidt1_intercept,
+         r_BRBR_23 = b_log1pPtoidt1_intercept + b_log1pPtoidt1_temp*3) %>%
+  select(pp_ID, r_BRBR_20, r_BRBR_23) %>%
+  gather(key = temp, value = r, -pp_ID) %>%
+  # use all samples to see occasional unrealistic estimate # filter(pp_ID %in% rsamp) %>% # subsample to avoid crowding plot
+  ggplot(., aes(x = temp, y = r)) +
+  geom_line(aes(group = pp_ID), alpha = 0.1) +
+  stat_summary(fun.y = mean, geom = "point", col = "red", size = 2) +
+  geom_hline(yintercept = 0, linetype = "dotted", color = "red") 
+```
+
+Note that some of the posterior samples can be biologically unfeasible, such as aphids with negative intrinsic growth rates. I restrict our inference to those parameters that are feasible. For example, if an aphid's intrinsic growth rate was estimated as negative, I manually set it to a small positive value of 0.1. In terms of the interactions, I ensured that any apparent negative effects of aphids on the parasitoids was unrealistic, so I constrained this parameter to be zero or positive.
+
+Note that if I went ahead without this biological restriction, our results remain qualitatively the same. 
+
+```{r warning=FALSE}
+# get posterior samples of structural stability
+temp20C_stability <- apply(
+  pp.temp_model, 
+  MARGIN = 1, 
+  FUN = function(x) { 
+    tmp.mat = matrix(c(0,
+                       0, 
+                       x["b_log1pBRBRt1_log1pPtoid_t"],
+                       x["b_log1pLYERt1_log1pBRBR_t"],
+                       x["b_log1pLYERt1_log1pLYER_t"], 
+                       x["b_log1pLYERt1_log1pPtoid_t"],
+                       x["b_log1pPtoidt1_log1pBRBR_t"],
+                       x["b_log1pPtoidt1_log1pLYER_t"], 
+                       0),
+                     ncol = 3, byrow = TRUE)
+    # constrain BRBR-Ptoid interaction to a min of zero
+    if(tmp.mat[3,1] < 0){
+       tmp.mat[3,1] <- 0
+    }
+    
+    tmp.r = matrix(c(x["b_log1pBRBRt1_intercept"],
+                     x["b_log1pLYERt1_intercept"],
+                     x["b_log1pPtoidt1_intercept"]),
+                   ncol = 1)
+    # constrain BRBR intrinsic growth rate to positive values
+    if(tmp.r[1] < 0){
+      tmp.r[1] <- 0.1 # small positive value
+    }
+    # constrain Ptoid intrinsic growth rate to negative values
+    if(tmp.r[3] > 0){
+      tmp.r[3] <- -0.1 # small negative value
+    }
+    
+    Feasibility = as.numeric(FeasibilityBoundary(tmp.mat, tmp.r)["feasibility"])
+    FeasibilityBoundary23 = as.numeric(FeasibilityBoundary(tmp.mat, tmp.r)["alpha.A23"])
+    Extinctions = paste0(which(-1*inv(tmp.mat) %*% tmp.r < 0), collapse = ",")
+    Resilience = max(Re(eigen((tmp.mat + diag(3)))$values))
+    list(tmp.mat = tmp.mat,
+         tmp.r = tmp.r,
+         Feasibility = Feasibility,
+         FeasibilityBoundary23 = FeasibilityBoundary23,
+         Extinctions = Extinctions,
+         Resilience = Resilience)
+  })
+temp20C_stability.df <- data.frame(
+  temp = "20 C",
+  posterior_sample = 1:nrow(pp.temp_model),
+  Feasibility = unlist(lapply(temp20C_stability, FUN = function(x) x$Feasibility)),
+  FeasibilityBoundary23 = unlist(lapply(temp20C_stability, FUN = function(x) x$FeasibilityBoundary23)),
+  Extinctions = unlist(lapply(temp20C_stability, FUN = function(x) x$Extinctions)),
+  Resilience = unlist(lapply(temp20C_stability, FUN = function(x) x$Resilience))
+)
+
+temp23C_stability <- apply(
+  pp.temp_model, 
+  MARGIN = 1, 
+  FUN = function(x) { 
+    tmp.mat = matrix(c(0,#x["b_log1pBRBRt1_log1pBRBR_t"] + x["b_log1pBRBRt1_log1pBRBR_t:temp"]*3, 
+                       0, 
+                       x["b_log1pBRBRt1_log1pPtoid_t"] + x["b_log1pBRBRt1_log1pPtoid_t:temp"]*3,
+                       x["b_log1pLYERt1_log1pBRBR_t"], 
+                       x["b_log1pLYERt1_log1pLYER_t"], 
+                       x["b_log1pLYERt1_log1pPtoid_t"],
+                       x["b_log1pPtoidt1_log1pBRBR_t"] + x["b_log1pPtoidt1_log1pBRBR_t:temp"]*3, 
+                       x["b_log1pPtoidt1_log1pLYER_t"], 
+                       0),
+                     ncol = 3, byrow = TRUE)
+    # constrain BRBR-Ptoid interaction to a min of zero
+    if(tmp.mat[3,1] < 0){
+       tmp.mat[3,1] <- 0
+    }
+    
+    tmp.r = matrix(c(x["b_log1pBRBRt1_intercept"] + x["b_log1pBRBRt1_temp"]*3,
+                     x["b_log1pLYERt1_intercept"],
+                     x["b_log1pPtoidt1_intercept"] + x["b_log1pPtoidt1_temp"]*3),
+                   ncol = 1)
+    # constrain BRBR intrinsic growth rate to positive values
+    if(tmp.r[1] < 0){
+      tmp.r[1] <- 0.1 # small positive value
+    }
+    # constrain Ptoid intrinsic growth rate to negative values
+    if(tmp.r[3] > 0){
+      tmp.r[3] <- -0.1 # small negative value
+    }
+    
+    Feasibility = as.numeric(FeasibilityBoundary(tmp.mat, tmp.r)["feasibility"])
+    FeasibilityBoundary23 = as.numeric(FeasibilityBoundary(tmp.mat, tmp.r)["alpha.A23"])
+    Extinctions = paste0(which(-1*inv(tmp.mat) %*% tmp.r < 0), collapse = ",")
+    Resilience = max(Re(eigen((tmp.mat + diag(3)))$values))
+    list(tmp.mat = tmp.mat,
+         tmp.r = tmp.r,
+         Feasibility = Feasibility,
+         FeasibilityBoundary23 = FeasibilityBoundary23,
+         Extinctions = Extinctions,
+         Resilience = Resilience)
+  })
+temp23C_stability.df <- data.frame(
+  temp = "23 C",
+  posterior_sample = 1:nrow(pp.temp_model),
+  Feasibility = unlist(lapply(temp23C_stability, FUN = function(x) x$Feasibility)),
+  FeasibilityBoundary23 = unlist(lapply(temp23C_stability, FUN = function(x) x$FeasibilityBoundary23)),
+  Extinctions = unlist(lapply(temp23C_stability, FUN = function(x) x$Extinctions)),
+  Resilience = unlist(lapply(temp23C_stability, FUN = function(x) x$Resilience))
+)
+
+
+all.temp_stability.df <- bind_rows(temp20C_stability.df, temp23C_stability.df) 
+```
+
+## Reproduce Fig. S2
+
+```{r}
+# Boundary determined by LYER-Ptoid (23)
+all.temp_stability.df %>%
+  filter(posterior_sample %in% rsamp) %>% # plot subset of posterior for easier visualization
+  mutate(n.temp = as.numeric(as.factor(temp))) %>% 
+  ggplot(., aes(x = n.temp, y = FeasibilityBoundary23)) +
+  geom_line(aes(group = posterior_sample), alpha = 0.1) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  stat_summary(fun.y = mean, geom = "line", color = "red", size = 1) +
+  stat_summary(fun.y = mean, geom = "point", color = "red", size = 1.5) +
+  theme_minimal_hgrid() +
+  scale_x_continuous(name = "Temperature", breaks = c(1,2), labels = c("20 C", "23 C"), expand = c(0.1,0.1)) +
+  ylab("Normalized angle from critical boundary")
+# ggsave(filename = "figures/MAR1-posterior-initial-temp.pdf", height = 5, width = 6)
+
+## calculate percentage of posterior estimates where temperature decreases structural stability
+# organize data
+FeasibilityBoundary23_df <- all.temp_stability.df %>%
+  select(temp, posterior_sample, FeasibilityBoundary23) %>%
+  spread(key = temp, value = FeasibilityBoundary23) %>%
+  mutate(Diff = `23 C` - `20 C`)
+# calculate percentage
+mean(FeasibilityBoundary23_df$Diff < 0)
+```
+
+## Non-equilibrium simulation (Fig. S3)
+
+```{r}
+noneq_temp20 <- SimulateCommunityDynamics(IGR.Vector = temp20.IGR, Interaction.Matrix = (temp20.mat + diag(3)), Duration = 9) %>% mutate(temp = "20 C")
+
+noneq_temp23 <- SimulateCommunityDynamics(IGR.Vector = temp23.IGR, Interaction.Matrix = (temp23.mat + diag(3)), Duration = 7) %>% mutate(temp = "23 C")
+
+bind_rows(noneq_temp20, noneq_temp23) %>%
+  gather(Species, value = "Abundance", -Week, - temp) %>%
+  ggplot(., aes(x = Week, y = Abundance, color = Species)) +
+  geom_hline(yintercept = 0, linetype = "dotted") +
+  geom_line() +
+  geom_point() +
+  facet_wrap(~temp, ncol = 1) +
+  theme_minimal_hgrid() +
+  ylab("Abundance (log scale)") +
+  scale_color_viridis_d(labels = c("B. brassicae","L. erysimi","D. rapae"))
+# ggsave(filename = "figures/MAR1-nonequilibrium-initial-temp.pdf", height = 5, width = 6)
+```
+
+
+
+# Save analysis 
+
+Write out an `.RData` file to use for the Supplementary Online Materiak.
+
+```{r}
+save.image(file = "output/structural-stability-keystone.RData")
+```

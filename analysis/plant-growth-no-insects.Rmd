@@ -38,7 +38,12 @@ CageLevelBiomass <- ChamberNoInsectsDF %>%
   select(cage = Cage, temp = Temperature, rich = Richness, com = Composition, Col, gsm1, AOP2, AOP2.gsoh, Biomass_g) %>%
   # adjust temp and rich so effect of +1 C is comparable to +1 genotype
   mutate(temp = ifelse(temp == "20 C", 0, 3),
-         rich = rich - 1)
+         rich = rich - 1,
+         # define orthogonal constrasts to test for above-average allele effects.
+        # aop2_vs_AOP2 must be included first
+        aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
+        mam1_vs_MAM1 = gsm1 - Col, # aop2_vs_AOP2 must be included in model
+        gsoh_vs_GSOH = AOP2.gsoh - AOP2)
 
 # source in ANOVA GLM for adjusted F-tests
 source('code/glm-ftest.R')
@@ -61,7 +66,7 @@ glm.ftest.v2(
 anova(aov(log(Biomass_g) ~ temp + rich + com + temp:rich + temp:com, CageLevelBiomass))
 ```
 
-# Reproduce Table S4
+# Reproduce Table S5
 
 ```{r}
 # fit ANOVA
@@ -69,101 +74,84 @@ biomass_noinsects_glmf <- glm.ftest.v2(
   model = glm(data = CageLevelBiomass,
               family = gaussian(link = "identity"),
               # logging improves residual distribution
-              formula = log(Biomass_g) ~ temp + rich + com + temp:rich + temp:com),
+              formula = log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + com + temp:(rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH) + temp:com),
  test.formula = list(c("temp","temp:com"),
                      c("rich","com"),
-                     c("temp:rich","temp:com")))[[3]] %>%
+                     c("aop2_vs_AOP2","com"),
+                     c("mam1_vs_MAM1","com"),
+                     c("gsoh_vs_GSOH","com"),
+                     c("temp:rich","temp:com"),
+                     c("temp:aop2_vs_AOP2","temp:com"),
+                     c("temp:mam1_vs_MAM1","temp:com"),
+                     c("temp:gsoh_vs_GSOH","temp:com")))[[3]] %>%
   # tidy table
   select(Source = treatment, 
          `df (Source)` = num_df, 
          `df (Error)` = den_df,
          Deviance = deviance,
          `Mean Deviance` = mean_deviance,
-         F = F, P = P, Error = error) 
+         F = F, P = P, Error = error)
 
-# reproduce table S4 in Supplementary Materials
+# reproduce table S5 in Supplementary Materials
 biomass_noinsects_glmf %>%
   kable(., caption = "Analysis of variance for plant biomass (log transformed) in the absence of insects.", booktabs = T) %>%
   kable_styling(latex_options = c("striped", "hold_position"))
 ```
 
-```{r include=FALSE}
-# calculate effect of temperature
-temp_biomass_CI <- conf_int(
-  glm(data = CageLevelBiomass,
-              family = gaussian(link = "identity"),
-              formula = log(Biomass_g) ~ temp),
-  vcov = "CR2", 
-  test = "naive-t", 
-  coefs = "temp", 
-  cluster = with(CageLevelBiomass, paste(temp, com))) %>%
-  data.frame() %>%
-  rownames_to_column(var = "term")
-
-# calculate effect of genetic diversity
-rich_biomass_CI <- conf_int(
-  glm(data = CageLevelBiomass,
-              family = gaussian(link = "identity"),
-              formula = log(Biomass_g) ~ temp + rich),
-  vcov = "CR2", 
-  test = "naive-t", 
-  coefs = "rich", 
-  cluster = CageLevelBiomass$com) %>%
-  data.frame() %>%
-  rownames_to_column(var = "term")
-
-# visualize effect sizes
-bind_rows(temp_biomass_CI, rich_biomass_CI) %>%
-  mutate(term = factor(term, 
-                       levels = c("temp","rich"))) %>%
-  ggplot(aes(x = term, y = beta, color = term)) +
-  geom_point(size = 3) +
-  geom_hline(yintercept = 0, linetype = "dotted") +
-  geom_linerange(aes(ymax = CI_U, ymin = CI_L)) +
-  geom_linerange(aes(ymin = beta - SE, ymax = beta + SE), size = 1.25) +
-  scale_y_continuous(name = "Change in plant biomass (log-scale)") +
-  scale_x_discrete(labels = c("Warming\n (+1°C)","Genetic diversity\n(+1 genotype)")) +
-  scale_color_manual(values = c("black","black"), guide = F) +
-  xlab("") +
-  theme_cowplot(font_size = 18, line_size = 1)
-```
-
-# Reproduce Fig. S8
+# Reproduce Fig. S6
 
 ```{r}
 # calculate 95% confidence intervals with `com` as the cluster level
-geno_biomass_CI_raw <- conf_int(
+aop2_CI <- conf_int(
   glm(data = CageLevelBiomass,
               family = gaussian(link = "identity"),
-              formula = log(Biomass_g) ~ -1 + temp + Col + gsm1 + AOP2 + AOP2.gsoh),
+              formula = log(Biomass_g) ~ -1 + temp + I(AOP2 + AOP2.gsoh) + I(Col + gsm1)),
   vcov = "CR2", 
   test = "naive-t", 
-  coefs = c("Col","gsm1","AOP2","AOP2.gsoh"), 
+  coefs = c("I(AOP2 + AOP2.gsoh)","I(Col + gsm1)"), 
   cluster = CageLevelBiomass$com) %>%
   data.frame() %>%
-  rownames_to_column(var = "term")
+  rownames_to_column(var = "term") %>%
+  mutate(allele = c("AOP2","aop2"))
 # note that I back transform to original scale for plotting
+exp(aop2_CI$beta[2])
+
+# get the effect of each genotype
+mean_geno <- conf_int(
+  glm(data = CageLevelBiomass,
+              family = gaussian(link = "identity"),
+              formula = log(Biomass_g) ~ -1 + temp + AOP2 + AOP2.gsoh + Col + gsm1),
+  vcov = "CR2",
+  test = "naive-t",
+  cluster = CageLevelBiomass$com,
+  coefs = c("AOP2","AOP2.gsoh","Col","gsm1")
+) %>%
+  data.frame() %>%
+  rownames_to_column(var = "term") %>%
+  mutate(allele = c("AOP2","AOP2","aop2","aop2"),
+         term = factor(term, levels = c("Col","gsm1","AOP2","AOP2.gsoh"), labels = c("Col","gsm1","AOP2","AOP2/gsoh")))
 
 # plot on original scale
-geno_biomass_CI_raw %>%
-  mutate(term = factor(term, 
-                       levels = c("Col","gsm1","AOP2","AOP2.gsoh"))) %>%
-  ggplot(aes(x = term, y = exp(beta), color = term)) +
-  geom_point(size = 3) +
+# adding a genotype with an aop2 allele to the population doubles the likelihood of species persistence
+ggplot(aop2_CI, aes(x = allele, y = exp(beta))) +
+  geom_point(size = 5) +
+  geom_point(data = mean_geno, aes(color = term), size = 5, position = position_dodge(width = 0.3)) +
+  geom_linerange(aes(ymax = exp(beta + SE), ymin = exp(beta - SE)), size = 1.5) +
   geom_linerange(aes(ymax = exp(CI_U), ymin = exp(CI_L))) +
-  geom_linerange(aes(ymin = exp(beta - SE), ymax = exp(beta + SE)), size = 1.25) +
-  scale_y_continuous(name = "Plant biomass (g)") + 
-  scale_x_discrete(labels = c("Col-0","gsm1","AOP2","AOP2/gsoh")) +
-  scale_color_manual(values = c("darkgreen","steelblue","darkorange","firebrick1"), guide = F) +
-  xlab("") +
+  scale_x_discrete(labels = c("AOP2\u2013","AOP2+")) +
+  scale_y_continuous("Plant biomass (g)") +
+  xlab("Allele") + 
+  scale_color_manual(values = c("darkgreen","steelblue","darkorange","firebrick1"), name = "") + 
   theme_cowplot(font_size = 18, line_size = 1)
+# ggsave(filename = "figures/AOP2-growth-no-insects.pdf", height = 6, width = 8, device=cairo_pdf)
 ```
+
 
 # Save analysis
 
 Write out an `.RData` file to use for creating the Supplementary Material Results.
 
 ```{r}
-save.image(file = "output/plant-growth-no-insects.RData")
+# save.image(file = "output/plant-growth-no-insects.RData")
 ```
 
