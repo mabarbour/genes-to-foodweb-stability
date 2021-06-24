@@ -1,0 +1,387 @@
+---
+title: "prep-timeseries"
+author: "mabarbour"
+date: "2021-05-19"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+# set knitr options
+knitr::opts_chunk$set(autodep = TRUE, message = FALSE)
+
+# load required libraries
+library(MASS) # must be before dplyr
+library(tidyverse)
+library(cowplot)
+library(knitr)
+
+# set ggplot  theme
+theme_set(theme_cowplot())
+```
+
+# Upload original data
+
+```{r}
+original_df <- read_csv("data/InsectAbundanceSurvival.csv")
+```
+
+# Underneath leaves correction for LYER and Ptoid
+
+We are only using data from the last week of the experiment, for which we have estimates of LYER and Ptoids (mummies actually) underneath the leaf
+
+```{r}
+# only retain cages where LYER or Parasitoids survived
+# no surviving BRBR, so we can't estimate this
+LYER_df_17 <- filter(original_df, Week == "17") %>% filter(LYER_Survival == 1) %>% dplyr::select(Cage, LYER)
+Mummy_df_17 <- filter(original_df, Week == "17") %>% filter(Mummy_Ptoids_Survival == 1) %>% dplyr::select(Cage, Mummy_raw)
+
+# underneath leaf counts, only available for last week of experiment
+underneath_df <- read_csv("data/insect_abundance_data_2018-09-26_underneathleaf.csv") # counted to individual resolution
+
+# merge with original data
+LYER_df_17 <- left_join(LYER_df_17, dplyr::select(underneath_df, Cage, underneath_LYER = LYER))
+Mummy_df_17 <- left_join(Mummy_df_17, dplyr::select(underneath_df, Cage, underneath_Mummy = Mummy))
+```
+
+## LYER
+
+```{r }
+## exploratory plots ----
+
+# all data
+x11(); ggplot(LYER_df_17, aes(x = log1p(LYER), y = log(underneath_LYER))) +
+  geom_point() + geom_smooth(method = "lm") 
+
+# remove outlier
+x11(); ggplot(LYER_df_17[-31,], aes(x = log1p(LYER), y = log(underneath_LYER))) +
+  geom_point() + geom_smooth(method = "lm")
+
+## GLM ----
+
+# I dropped the outlier because I truly think it was an unusual data point and would bias our other estimates.
+plot(MASS::glm.nb(underneath_LYER ~ log1p(LYER), LYER_df_17), which = 5)
+summary(glm(underneath_LYER ~ log1p(LYER), LYER_df_17[-31,], family = poisson)) # residual deviance suggests a lot of overdispersion, so I'm going to use a negative binomial model
+LYER_underneath_glm.nb <- MASS::glm.nb(underneath_LYER ~ log1p(LYER), LYER_df_17[-31,]) 
+summary(LYER_underneath_glm.nb)
+
+LYER_correction_glm.nb <- function(x) round(predict(LYER_underneath_glm.nb, newdata = data.frame(LYER = x), type = "response"), 0)
+# will add between 30 and 286 individual LYER to LYER_t
+LYER_correction_glm.nb(c(0,max(original_df$LYER, na.rm = T)))
+```
+
+## Mummy and Ptoids
+
+```{r }
+## exploratory plot ----
+x11(); ggplot(Mummy_df_17, aes(x = log1p(Mummy_raw), y = log(underneath_Mummy))) +
+  geom_point() + geom_smooth(method = "lm")
+# the predicted increase is based on 1 data point
+summary(Mummy_outlier_glm.nb <- MASS::glm.nb(underneath_Mummy ~ log1p(Mummy_raw), Mummy_df_17))
+# hmmm, this model predicts that there could be as many as 43,291 mummies underneath the leaves, which is insane
+round(predict(Mummy_outlier_glm.nb, newdata = data.frame(Mummy_raw = c(0, max(original_df$Mummy_raw, na.rm = T))), type = "response"),0)
+# I think the baseline value, for which we have 5 data points is reasonable
+# but for the increase, I'm going to use the slope of LYER, which seems reasonable given that this was the primary
+# consumer-resource relationship and LYER was often found underneath the leaves compared to BRBR
+
+summary(Mummy_underneath_glm.nb <- MASS::glm.nb(underneath_Mummy ~ 1, filter(Mummy_df_17, Mummy_raw == 0)))
+round(exp(coef(Mummy_underneath_glm.nb)["(Intercept)"]),0) # predicts 5 underneath leaves if there was a zero above rosette count
+
+Mummy_correction_glm.nb <- function(x) round(exp(coef(Mummy_underneath_glm.nb)["(Intercept)"] + coef(LYER_underneath_glm.nb)["log1p(LYER)"]*log1p(x)),0)
+Mummy_correction_glm.nb(c(0,max(original_df$Mummy_raw, na.rm = T))) # now that's more reasonable
+```
+
+# Measurement error
+
+Below, I estimate measurement error for BRBR, LYER, and Ptoid counts. This uses data for which we had overlapping counts for MAB (first author) and DTV (technician that was instrumental to the study).
+
+```{r}
+# identify cage-week combinations with repeated measurements
+rep_df <- original_df %>% 
+  distinct(Cage, Week, Counter) %>%
+  group_by(Cage, Week) %>%
+  summarise(n = n()) %>%
+  filter(n > 1)
+```
+
+## BRBR
+
+```{r }
+# make BRBR measurement error (me) df
+BRBR_me_df <- left_join(rep_df, dplyr::select(original_df, Cage, Week, Counter, BRBR, BRBR_Survival)) %>% 
+  drop_na() %>% 
+  filter(BRBR_Survival == 1) %>%
+  spread(key = Counter, value = BRBR) %>%
+  mutate(log1p_DTV = log1p(DTV),
+         log1p_MAB = log1p(MAB)) %>%
+  ungroup()
+BRBR_me <- apply(select(BRBR_me_df, log1p_DTV, log1p_MAB), MARGIN = 1, FUN = sd)
+hist(BRBR_me)
+median(BRBR_me, na.rm = T)
+```
+
+## LYER
+
+```{r }
+# make LYER measurement error (me) df
+LYER_me_df <- left_join(rep_df, dplyr::select(original_df, Cage, Week, Counter, LYER, LYER_Survival)) %>% 
+  drop_na() %>% 
+  filter(LYER_Survival == 1) %>%
+  spread(key = Counter, value = LYER) %>%
+  mutate(log1p_DTV = log1p(DTV),
+         log1p_MAB = log1p(MAB),
+         abs.diff_log1p = log1p_DTV - log1p_MAB,
+         mean.diff_log1p = log1p_DTV - (log1p_DTV+log1p_MAB)/2) %>%
+  ungroup()
+LYER_me <- apply(select(LYER_me_df, log1p_DTV, log1p_MAB), MARGIN = 1, FUN = sd)
+hist(LYER_me)
+median(LYER_me, na.rm = T)
+```
+
+## Mummy-Ptoids
+
+```{r}
+# make Mummy_Ptoids measurement error (me) df
+Mummy_Ptoids_me_df <- left_join(rep_df, dplyr::select(original_df, Cage, Week, Counter, Mummy_Ptoids, Mummy_Ptoids_Survival)) %>% 
+  drop_na() %>% 
+  filter(Mummy_Ptoids_Survival == 1) %>%
+  spread(key = Counter, value = Mummy_Ptoids) %>%
+  mutate(log1p_DTV = log1p(DTV),
+         log1p_MAB = log1p(MAB)) %>%
+  ungroup()
+Mummy_Ptoids_me <- apply(select(Mummy_Ptoids_me_df, log1p_DTV, log1p_MAB), MARGIN = 1, FUN = sd)
+hist(Mummy_Ptoids_me)
+median(Mummy_Ptoids_me, na.rm = T)
+```
+
+# Tidy timeseries data
+
+```{r}
+# useful function
+mean_integer <- function(x) as.integer(mean(x, na.rm=T)) # remove NA, otherwise, the count will be set to zero if only 1 counter counted.
+```
+
+```{r}
+# make timeseries dataset
+timeseries_df <- original_df %>%
+  select(Cage, Week, temp = Temperature, rich = Richness, com = Composition, Col, gsm1, AOP2, AOP2.gsoh, BRBR_Survival, LYER_Survival, Mummy_Ptoids_Survival, BRBR_t = BRBR, LYER_t = LYER, Ptoid_t = Mummy_Ptoids, Mummy_t_raw = Mummy_raw) %>%
+  # applying adjustments before averaging across counters
+  mutate(LYER_t_adj = ifelse(LYER_Survival == 0 | is.na(LYER_Survival) == T, 1,   # replace extinction zeros with value of 1
+                             ifelse(LYER_Survival == 1, LYER_t + LYER_correction_glm.nb(LYER_t), LYER_t)), # add adjusted values
+         # Ptoid should always be zero for Week 1 and 2, as they were added after sampling aphids in week 2. But we set them to 1 for extrapolating predictions
+         Ptoid_t_adj = ifelse(Mummy_Ptoids_Survival == 0 | is.na(Mummy_Ptoids_Survival) == T, 1,   # replace extinction zeros with value of 1
+                              ifelse(Mummy_Ptoids_Survival == 1, Ptoid_t + Mummy_correction_glm.nb(Mummy_t_raw), Ptoid_t))) %>% # add adjusted values
+  # apply adjustments for log-log analysis, using minimum count resolutions
+  # note that we NEVER used extinct species in fitting the multivariate model, only for extrapolating predictions from multivariate model to extant species
+  mutate(BRBR_t = ifelse(BRBR_Survival == 0 | is.na(BRBR_Survival) == T, 1,  # replace extinction zeros with value of 1
+                         ifelse(BRBR_t == 0 & BRBR_Survival == 1 & Week < 2, 1,   # replaced undetected zeros before week 2 with value of 1
+                                ifelse(BRBR_t == 0 & BRBR_Survival == 1 & Week > 1, 5, BRBR_t))), # replace undetected zeros with value of 5
+         LYER_t = ifelse(LYER_Survival == 0 | is.na(LYER_Survival) == T, 1,   # replace extinction zeros with value of 1
+                         ifelse(LYER_t == 0 & LYER_Survival == 1 & Week < 2, 1,     # replaced undetected zeros before week 2 with value of 1
+                                ifelse(LYER_t == 0 & LYER_Survival == 1 & Week > 1, 5, LYER_t))), # replaced undetected zeros after week 1 with value of 5
+         Ptoid_t = ifelse(Mummy_Ptoids_Survival == 0 | is.na(Mummy_Ptoids_Survival) == T, 1,   # replace extinction zeros with value of 1
+                          ifelse(Ptoid_t == 0 & Mummy_Ptoids_Survival == 1, 1, Ptoid_t))) %>%     # replaced undetected zeros with value of 1
+  group_by(Cage, Week, temp, rich, com, Col, gsm1, AOP2, AOP2.gsoh) %>%
+  # average across counters
+  summarise_all(~ mean_integer(.)) %>% # funs(mean_integer)
+  ungroup()
+
+# initial additions of aphids (4 individuals)
+init_timeseries_df <- timeseries_df %>%
+  distinct(Cage, temp, rich, com, Col, gsm1, AOP2, AOP2.gsoh) %>%
+  # set Ptoid values to 1 for extrapolating predictions
+  mutate(Week = 0, BRBR_Survival = 1, LYER_Survival = 1, Mummy_Ptoids_Survival = NA, 
+         BRBR_t = 4, LYER_t = 4, Ptoid_t = 1, Mummy_t_raw = NA, # set Mummy_t to be consistent with its raw classification in the data
+         LYER_t_adj = 4, Ptoid_t_adj = 1)
+init_timeseries_df 
+
+# create lagged (t-1) and leading variable at time t+1
+timeseries_df <- bind_rows(init_timeseries_df, timeseries_df) %>%
+  arrange(Cage, Week) %>%
+  group_by(Cage) %>%
+  # leading
+  mutate(BRBR_Survival_t1 = lead(BRBR_Survival, n = 1, order_by = Week),
+         BRBR_t1 = lead(BRBR_t, n = 1, order_by = Week),
+         LYER_Survival_t1 = lead(LYER_Survival, n = 1, order_by = Week),
+         LYER_t1 = lead(LYER_t, n = 1, order_by = Week),
+         LYER_t1_adj = lead(LYER_t_adj, n = 1, order_by = Week),
+         Mummy_Ptoids_Survival_t1 = lead(Mummy_Ptoids_Survival, n = 1, order_by = Week),
+         Ptoid_t1 = lead(Ptoid_t, n = 1, order_by = Week),
+         Ptoid_t1_adj = lead(Ptoid_t_adj, n = 1, order_by = Week)) %>%
+  # lagged. set default = 1 to include in extrapolations for log analysis
+  mutate(BRBR_t0 = lag(BRBR_t, n = 1, order_by = Week, default = 1),
+         LYER_t0 = lag(LYER_t, n = 1, order_by = Week, default = 1),
+         #LYER_t0_adj = lag(LYER_t_adj, n = 1, order_by = Week),
+         Ptoid_t0 = lag(Ptoid_t, n = 1, order_by = Week, default = 1))#,
+         #Ptoid_t0_adj = lag(Ptoid_t_adj, n = 1, order_by = Week))
+
+# add two parasitoid females to experiment after counts on week 2 and 3
+timeseries_df$Ptoid_t[which(timeseries_df$Week == 2)] <- 2
+timeseries_df$Ptoid_t[which(timeseries_df$Week == 3)] <- timeseries_df$Ptoid_t[which(timeseries_df$Week == 3)] + 2
+# repeat for adjusted
+timeseries_df$Ptoid_t_adj[which(timeseries_df$Week == 2)] <- 2
+timeseries_df$Ptoid_t_adj[which(timeseries_df$Week == 3)] <- timeseries_df$Ptoid_t_adj[which(timeseries_df$Week == 3)] + 2
+# and for lagged values
+timeseries_df$Ptoid_t0[which(timeseries_df$Week == 2)] <- 1 # actual zero, but setting to 1 for log() analysis later.
+timeseries_df$Ptoid_t0[which(timeseries_df$Week == 3)] <- 2 # 2 parasitoids added in previous week
+timeseries_df$Ptoid_t0[which(timeseries_df$Week == 4)] <- timeseries_df$Ptoid_t0[which(timeseries_df$Week == 4)] + 2 # adding 2 parasitoids to count from previous week (often zero)
+# and for lagged adjusted values
+#timeseries_df$Ptoid_t0_adj[which(timeseries_df$Week == 2)] <- 0 # maintaing at zero, because it is, will adjust by adding 1 for log() analysis later
+#timeseries_df$Ptoid_t0_adj[which(timeseries_df$Week == 3)] <- 2 # 2 parasitoids added in previous week
+#timeseries_df$Ptoid_t0_adj[which(timeseries_df$Week == 4)] <- timeseries_df$Ptoid_t0_adj[which(timeseries_df$Week == 4)] + 2 # adding 2 parasitoids to count from previous week (often zero)
+# before we were ignoring the initial increase of parasitoids from week 2 to week 3, since they are at zeros in the dataset, although I added 2 individuals after week 2 and 3 counts. I added the lines above to incorporate this info
+# note that Ptoid_t1 will not exactly match Ptoid_t, but that is intentional since those data are derived from counts
+
+# adjust Mummy_Ptoid_Survival so it doesn't start at Week 3, but Week 2
+timeseries_df$Mummy_Ptoids_Survival[which(timeseries_df$Week == 2)] <- 1
+
+# all NA for prediction next week at week 17, which makes sense because that's when the experiment ended so we are going to remove this week
+filter(timeseries_df, Week == 17) %>%
+  select(BRBR_t1, LYER_t1, LYER_t1_adj, Ptoid_t1, Ptoid_t1_adj) %>%
+  data.frame()
+timeseries_df <- filter(timeseries_df, Week != 17)
+
+# 17 weeks of data still because we include initial Week = 0
+dim(timeseries_df)[1] / length(unique(timeseries_df$Cage)) 
+
+# add new predictors
+timeseries_df <- timeseries_df %>%
+  mutate(temp = ifelse(temp == "20 C", 0, 3), # now on scale of 1 deg C
+         aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
+         aop2_genotypes = Col + gsm1,
+         AOP2_genotypes = AOP2 + AOP2.gsoh) 
+```
+
+# Plant biomass data
+
+```{r}
+# load and manage plant biomass time-series data
+tmp.biomass <- read_csv("data/ExperimentPlantBiomass.csv") %>%
+  select(Cage, Week, No_Plants, Biomass_g) # No_Plants not necessary because we're using Biomass_g as a covariate rather than a response
+  # note that there is no biomass data on first week, because plants were left in for 2 weeks
+  # we are going to interpolate this biomass based on the plants growth at
+  # week 2 of the experiment
+
+# get biomass at t+1
+get_biomass_t1 <- tmp.biomass %>%
+  mutate(Week = Week - 1) %>%
+  select(Cage, Week, Biomass_g_t1 = Biomass_g)
+
+# merge biomass at time t and t+1
+merge.biomass.df <- left_join(get_biomass_t1, tmp.biomass) %>%
+  # assuming a linear relationship in plant growth between weeks, since
+  # they had not hit the saturation point on their growth curve
+  mutate(Biomass_g = ifelse(Week == 1, Biomass_g_t1 - Biomass_g_t1/6, Biomass_g),
+         No_Plants = ifelse(Week == 1, 8, No_Plants)) %>%
+  arrange(Cage, Week)
+
+# infer biomass data at week 0
+biomass.0.df <- merge.biomass.df %>%
+  mutate(Week = Week - 1) %>%
+  select(Cage, Week, Biomass_g_t1 = Biomass_g) %>%
+  filter(Week == 0) %>%
+  mutate(Biomass_g = Biomass_g_t1 - Biomass_g_t1/5,
+         No_Plants = 8)
+
+# merge week 0 and rest of biomass data
+biomass.df <- bind_rows(filter(merge.biomass.df, Week > 0), biomass.0.df) %>%
+  arrange(Cage, Week)
+```
+
+## Final adjustments
+
+```{r}
+timeseries_df <- left_join(timeseries_df, biomass.df) %>% # add plant biomass to timeseries data
+  # turned logged predictors into named variables for measurement error model
+  mutate(logBRBR_t0 = log(BRBR_t0),
+         logBRBR_t = log(BRBR_t),
+         logLYER_t0 = log(LYER_t0),
+         logLYER_t = log(LYER_t),
+         logLYER_t_adj = log(LYER_t_adj),
+         logPtoid_t0 = log(Ptoid_t0),
+         logPtoid_t = log(Ptoid_t),
+         logPtoid_t_adj = log(Ptoid_t_adj)) %>%
+  # add measurement error. if alive, used median observed measurement error, if not, set to small value (0.01) to allow measurement error model to extrapolate
+  mutate(se_logBRBRt = ifelse(BRBR_Survival == 0 | is.na(BRBR_Survival) == T, 0.01,
+                              ifelse(BRBR_Survival == 1, median(BRBR_me, na.rm = T), NA)),
+         se_logLYERt = ifelse(LYER_Survival == 0 | is.na(LYER_Survival) == T, 0.01,
+                              ifelse(LYER_Survival == 1, median(LYER_me, na.rm = T), NA)),
+         se_logPtoidt = ifelse(Mummy_Ptoids_Survival == 0 | is.na(Mummy_Ptoids_Survival) == T, 0.01,
+                               ifelse(Mummy_Ptoids_Survival == 1, median(Mummy_Ptoids_me, na.rm = T), NA)))
+```
+
+
+# Subset for multivariate analysis
+
+## Aphids only
+
+```{r}
+# filter first two weeks of experiment
+aphids_only_df <- filter(timeseries_df, Week %in% c(0,1))
+```
+
+## All species
+
+I only retain data for which all species had positive abundances at the previous time step, and after all species have been added.
+
+```{r}
+# filter data where all species survived to time t
+full_df <- filter(timeseries_df, BRBR_Survival == 1, LYER_Survival == 1, Mummy_Ptoids_Survival == 1) 
+
+# tabulate variation in timeseries length for each cage
+with(full_df, table(Week, Cage))
+```
+
+
+## LYER-Ptoid subset
+
+```{r}
+# filter data where BRBR is absent, but LYER and Ptoid survived to time t
+LP_df <- filter(timeseries_df, BRBR_Survival == 0 | is.na(BRBR_Survival) == TRUE, LYER_Survival == 1, Mummy_Ptoids_Survival == 1) 
+
+# tabulate variation in timeseries length for each cage
+with(LP_df, table(Week, Cage))
+```
+
+## LYER only subset
+
+Includes cage-time combinations where only the aphid *Lipaphis erysimi* persisted.
+
+```{r}
+# filter data so only LYER persists
+L_df <- filter(timeseries_df, BRBR_Survival == 0 | is.na(BRBR_Survival) == TRUE, LYER_Survival == 1, Mummy_Ptoids_Survival == 0 | is.na(Mummy_Ptoids_Survival) == TRUE) 
+
+# tabulate variation in timeseries length for each cage
+with(L_df, table(Week, Cage))
+```
+
+## Ptoid only subset
+
+Includes cage-time combinations where both aphids went extinct and the parasitoid *Diaeretiella rapae* survived for 1 to 2 more sampling periods.
+
+```{r}
+# filter data where only ptoid was transiently present in absence of other species
+P_df <- filter(timeseries_df, BRBR_Survival == 0 | is.na(BRBR_Survival) == TRUE, LYER_Survival == 0 | is.na(LYER_Survival) == TRUE, Mummy_Ptoids_Survival == 1) 
+
+# tabulate variation in timeseries length for each cage
+with(P_df, table(Week, Cage))
+```
+
+# Final checks
+
+```{r}
+# all looks good, no NA or zero values
+summary(select(timeseries_df, BRBR_t0, BRBR_t, BRBR_t1)) 
+summary(select(timeseries_df, LYER_t0, LYER_t, LYER_t1, LYER_t_adj, LYER_t1_adj)) 
+summary(select(timeseries_df, Ptoid_t0, Ptoid_t, Ptoid_t1, Ptoid_t_adj, Ptoid_t1_adj))
+```
+
+
+# Sava data for structural stability analyses
+
+```{r}
+# saved on June 9, 2021
+# save(aphids_only_df, full_df, LP_df, L_df, P_df, file = "output/time-series-data.RData")
+```
+

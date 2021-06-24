@@ -1,0 +1,217 @@
+---
+title: "Critical transitions"
+author: "Matthew A. Barbour"
+date: "`r Sys.Date()`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+
+# load required libraries
+library(tidyverse) # for data management
+library(cowplot)
+library(msm)
+library(survival)
+library(broom)
+library(coxme)
+
+# set ggplot theme
+theme_set(theme_cowplot())
+```
+
+# Wrangle data
+
+```{r}
+# Load and manage data
+df <- read_csv("data/InsectAbundanceSurvival.csv") %>%
+  # renaming for brevity
+  rename(cage = Cage, 
+         com = Composition,
+         week = Week,
+         temp = Temperature,
+         rich = Richness) %>%
+  mutate(cage = as.character(cage),
+         fweek = factor(ifelse(week < 10, paste("0", week, sep=""), week)),
+         temp = ifelse(temp=="20 C", 0, 1)) %>%
+  arrange(cage, week)
+
+# create data for multi-state survival analysis
+state_df <- df %>%
+  # counter information is not relevant (because it is the same), so we summarise across it
+  group_by(cage, fweek, week, temp, rich, Col, gsm1, AOP2, AOP2.gsoh, com) %>% 
+  summarise_at(vars(BRBR_Survival, LYER_Survival, Mummy_Ptoids_Survival), list(mean)) %>% 
+  ungroup() %>%
+  # create possible food-web states
+  mutate(BRBR = ifelse(BRBR_Survival == 1, "BRBR", ifelse(BRBR_Survival == 0, "0", NA)),
+         LYER = ifelse(LYER_Survival == 1, "LYER", ifelse(LYER_Survival == 0, "0", NA)),
+         Ptoid = ifelse(Mummy_Ptoids_Survival == 1, "Ptoid", ifelse(Mummy_Ptoids_Survival == 0, "0", NA))) %>%
+  mutate(state = paste(BRBR, LYER, Ptoid, sep = "-"),
+         cage = as.character(cage)) %>%
+  # these variables are no longer needed
+  select(-BRBR, -LYER, -Ptoid) %>%
+  # remove all instances where all species have been labelled extinct for more than 1 week "NA-NA-NA".
+  # also, only keep observations after 2 weeks when we added the parasitoid (full community)
+  filter(state != "NA-NA-NA", week > 2) %>%
+  mutate(week_since = week - 2) 
+
+# replace NA with zeros for state variable
+state_df$state <- gsub("NA","0", state_df$state)
+
+# everything appears in order
+arrange(state_df, cage, week_since) %>% select(cage, week_since, BRBR_Survival, LYER_Survival, Mummy_Ptoids_Survival, state) 
+```
+
+# Multi-state Markov model with `msm`
+
+```{r}
+# state transitions for all cages and time points
+msm::statetable.msm(state = state, subject = cage, data = state_df)
+
+# turn state into numeric values, which is necessary for the analysis
+state_df$state_type <- with(state_df, ifelse(state == "BRBR-LYER-Ptoid", 1,
+                                             ifelse(state == "0-LYER-Ptoid", 2,
+                                                    ifelse(state == "0-LYER-0", 3,
+                                                           ifelse(state == "0-0-Ptoid", 4,
+                                                                  ifelse(state == "0-0-0", 5, NA))))))
+# no NAs
+which(is.na(state_df$state_type) == T)
+
+# inspect states
+statetable.msm(state = state_type, subject = cage, data = state_df)
+
+# specify allowed transitions
+Q <- rbind(c(0,1,0,1,0),
+           c(0,0,1,1,0),
+           c(0,0,0,0,1), 
+           c(0,0,0,0,1), 
+           c(0,0,0,0,0))
+
+# give informative labels
+rownames(Q) <- colnames(Q) <- c("1-1-1","0-1-1","0-1-0","0-0-1","0-0-0")
+
+# everything appears in order
+Q
+
+# we use this initial transition matrix by specifying "gen.inits = T" in msm model
+crudeinits.msm(state_type ~ week_since, subject = cage, data = state_df, qmatrix = Q)
+
+# fit model
+AOP2_foodweb.msm <- msm(state_type ~ week_since, 
+                         subject = cage, 
+                         data = state_df, 
+                         qmatrix = Q, 
+                         gen.inits = TRUE,
+                         # for "3-5" (aphid alone to collapse) and "4-5" (ptoid alone to collapse), 
+                         # I don't expect there to be any genetic effects, because the aphid alone 
+                         # will likely persist regardless of plant genetics. similarly, a parasitoid
+                         # population without any aphids will inevitably go extinct. 
+                          covariates = list("1-2" =~ I(Col+gsm1) + I(AOP2+AOP2.gsoh),
+                                            "1-4" =~ I(Col+gsm1) + I(AOP2+AOP2.gsoh),
+                                            "2-3" =~ I(Col+gsm1) + I(AOP2+AOP2.gsoh),
+                                            "2-4" =~ I(Col+gsm1) + I(AOP2+AOP2.gsoh)),
+                          obstype = 1)
+
+# hazard ratios for each food-web transition
+hazard.msm(AOP2_foodweb.msm)
+```
+
+# Reproduce Fig. S4
+
+```{r}
+# for coxph analysis (multistate), this may not be completely necessary
+AJ_state_df <- state_df %>%
+  # convert Ptoid only state to collapsed state, which is inevitable
+  mutate(state_adj = ifelse(state == "0-0-Ptoid", "0-0-0", state)) %>%
+  # convert state into a factor for analysis
+  mutate(fstate = factor(state_adj, levels = c("BRBR-LYER-Ptoid","0-LYER-Ptoid","0-LYER-0","0-0-0"))) %>%
+  mutate(rich_temp = paste(rich, temp, sep = "_")) %>%
+  mutate(aop2_genotypes = factor(Col+gsm1, levels = c(0,1,2), labels = c("AOP2\u2013 = 0", "AOP2\u2013 = 1", "AOP2\u2013 = 2")))
+
+# get food-web transitions as a function of number of aop2 genotypes
+aop2_AJ <- survfit(Surv(I(week_since-1), week_since, fstate) ~ aop2_genotypes, data = AJ_state_df, id = cage)
+tidy_aop2_AJ <- tidy(aop2_AJ)
+tidy_aop2_AJ$strata <- sub(pattern = "aop2_genotypes=", replacement = "", x = tidy_aop2_AJ$strata)
+
+# plot
+plot_aop2_genotypes_multistate <- ggplot(tidy_aop2_AJ, aes(x = time + 2, y = estimate)) +
+  geom_area(aes(fill = state)) +
+  facet_wrap(~strata) +
+  scale_fill_viridis_d(name = "Food-web state", labels = c("Arabidopsis only","Aphid only","Food chain","Initial")) +
+  xlab("Week of experiment") +
+  ylab("Proportion")
+x11(); plot_aop2_genotypes_multistate
+#ggsave(plot = plot_aop2_genotypes_multistate, filename = "figures/aop2-genotypes-multistate.pdf", width = 6, height = 5, device=cairo_pdf)
+```
+
+## Assess robustness of *AOP2* effect on food chain persistence
+
+```{r}
+## Organize data for analysis
+
+# LYER-Ptoid cages at least at one time point
+LP_cages <- unique(filter(state_df, state == "0-LYER-Ptoid")$cage)
+# should be 50 cages, and it is
+length(LP_cages)
+  
+# filter and manage data
+LP_transit_df <- state_df %>% 
+  filter(cage %in% LP_cages, state != "BRBR-LYER-Ptoid") %>%
+  # omit BRBR from consideration
+  select(-BRBR_Survival) %>% 
+  # omit rows where we already know either LYER or Ptoid went extinct
+  na.omit() %>% 
+  mutate(# assume these two states are the same, i.e. to get to 0-0-0, had to go through 0-0-Ptoid
+         state_adj = ifelse(state %in% c("0-0-Ptoid","0-0-0"), "0-0-Ptoid", state))
+
+# confirm levels
+unique(LP_transit_df$state_adj) #fstate)
+
+# get start times after BRBR went extinct
+get_LP_transit_start <- LP_transit_df %>%
+  group_by(cage) %>%
+  arrange(week_since) %>%
+  mutate(start = first(week_since)) 
+
+# all looks in order
+get_LP_transit_start %>% arrange(cage) %>% data.frame()
+
+# convert to Cox data frame for analysis
+LP_transit_cox_df <- get_LP_transit_start %>%
+  arrange(cage, week_since, state_adj) %>% 
+  select(cage, start, week_since, temp:com, state_adj) %>%
+  group_by(cage) %>% 
+  summarise(across(everything(), last)) %>%
+  mutate(#any_event = ifelse(state_adj == "0-LYER-Ptoid", 0, 1),
+         fstate = factor(state_adj, levels = c("0-LYER-Ptoid","0-LYER-0","0-0-Ptoid")))
+
+# all looks good, 50 data points
+LP_transit_cox_df %>% data.frame()
+
+# multi-state model
+LP_multi_coxph <- coxph(Surv(start, week_since, fstate) ~ I(Col+gsm1) + I(AOP2+AOP2.gsoh), LP_transit_cox_df, id = cage) # clear effect of AOP2-
+LP_multi_cox.zph <- cox.zph(LP_multi_coxph) 
+LP_multi_cox.zph # AOP2+ appears to violate cox assumption for food-chain to aphid transition
+plot(LP_multi_cox.zph[2]) # if anything, it appears we are underestimating the destabilizing effect of AOP2+, as it appears to initially increase the likelihood of a transition to the aphid only food web.
+
+coxph(list(Surv(start, week_since, fstate) ~ 1,
+           1:2 ~ I(Col+gsm1),
+           1:3 ~ I(Col+gsm1) + I(AOP2+AOP2.gsoh)), LP_transit_cox_df, id = cage)
+# even after dropping AOP2+ effect on 1:2 transition, doesn't affect previously identified effect on food-chain to collapse.
+
+coxph(Surv(start, week_since, fstate) ~ strata(temp) + I(Col+gsm1) + I(AOP2+AOP2.gsoh), LP_transit_cox_df, id = cage) # still a clear effect of AOP2- after stratifying by temperature
+
+# note we can reproduce the multi-state model by focusing piecewise on this hazard rate 
+coxph(Surv(start, week_since, fstate %in% c("0-0-Ptoid")) ~ strata(temp) + I(Col+gsm1) + I(AOP2+AOP2.gsoh), LP_transit_cox_df) # id = cage no longer needed, including it gives the same results.
+# this is good because then we can see what happens if we account for other sources of non-independence
+coxph(Surv(start, week_since, fstate %in% c("0-0-Ptoid")) ~ strata(temp) + I(Col+gsm1), LP_transit_cox_df) # effect persists when we have a more favorable event-to-variable ratio, although the coefficient has a slightly different meaning alone, so we retain both in the model.
+coxph(Surv(start, week_since, fstate %in% c("0-0-Ptoid")) ~ strata(temp) + I(Col+gsm1) + I(AOP2+AOP2.gsoh) + cluster(com), LP_transit_cox_df) # as before, we observe potentially anti-conservative results when clustering at com level.
+
+# results are robust to mixed-effect models
+coxme(Surv(start, week_since, fstate %in% c("0-0-Ptoid")) ~ strata(temp) + I(Col+gsm1) + I(AOP2+AOP2.gsoh) + (1|com), LP_transit_cox_df)
+coxme(Surv(start, week_since, fstate %in% c("0-0-Ptoid")) ~ strata(temp) + I(Col+gsm1) + I(AOP2+AOP2.gsoh) + (1|com/temp), LP_transit_cox_df)
+```
+
+

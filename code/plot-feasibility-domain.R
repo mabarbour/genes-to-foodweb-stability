@@ -4,6 +4,7 @@
 
 ## Load required libraries ----
 library(rgl)
+library(matlib)
 
 ## Code for a perfectly round sphere ----
 # note that I don't use this for any visualizations in the manuscript
@@ -69,6 +70,7 @@ FeasibilityBoundary <- function(A, r){
   alpha.A12 <- 90 - theta.A12
   alpha.A13 <- 90 - theta.A13
   alpha.A23 <- 90 - theta.A23
+
   if(all(-1*inv(A) %*% r > 0) == TRUE){
     feasibility <- 1
   } else{

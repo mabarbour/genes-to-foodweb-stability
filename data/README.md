@@ -1,6 +1,6 @@
 # Data
 
-## `arabidopsis_clean_df.csv`
+## `InsectAbundanceSurvival.csv`
 
 Contains data on experimental treatments, insect abundances, and observed extinctions. Metadata for each column is given below:
 
@@ -21,6 +21,10 @@ Contains data on experimental treatments, insect abundances, and observed extinc
 - `LYER`: Number of Lipaphis erysimi individuals. Aphid individuals were counted to a resolution of 1 individual in first 2 weeks, and to 5 individuals in subsequent weeks to allow for efficient counting of often high aphid abundances in all cages within one sampling date.
 - `Mummy_Ptoids`: Combined number of mummified aphids and adult parasitoid individuals. These counts were always to the individual level.
 - `*INSECT*_Survival`: Insect population had positive abundance (1) or went extinct (0). Samples after extinction were coded 'NA', except for Mummy_Ptoids, where NA also includes the first two weeks before they were added to the experiment.
+
+## `insect_abundance_data_2018-09-26_underneathleaf.csv`
+
+Contains data on *Lipaphis erysimi* and mummified aphids counted underneath the basal rosettes of plants in the last week of the experiment. This data was combined with the usual abundance data to adjust *L. erysimi* and *D. rapae* counts and assess the robustness of our inferences.
 
 ## `ExperimentPlantBiomass.csv`
 
