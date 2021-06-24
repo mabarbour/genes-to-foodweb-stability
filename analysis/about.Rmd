@@ -7,8 +7,8 @@ editor_options:
   chunk_output_type: console
 ---
 
-### **Abstract**: Genes encode information that determine an organism's fitness. Yet, we do not know the extent to which genes of one species determine the persistence of interacting species in an ecological community. Here we test the effect of three plant defense genes on the persistence of an insect food web. We found that a single allele at a single gene promoted coexistence by increasing the intrinsic growth rates of species across multiple trophic levels. Our discovery of a keystone gene illustrates the need to bridge between biological scales, from genes to ecosystems, to understand community persistence. In particular, our results indicate that ongoing losses of genetic diversity may induce critical transitions in the persistence and functioning of ecosystems. 
+### **Abstract**: Genes encode information that determine an organism's fitness. Yet, we do not know the extent to which genes of one species determine the persistence of interacting species in an ecological community. Here we test the effect of three plant defense genes on the persistence of an insect food web. We found that a single allele at a single gene promoted coexistence by increasing plant growth, which in turn increased the intrinsic growth rates of species across multiple trophic levels. Our discovery of a keystone gene illustrates the need to bridge between biological scales, from genes to ecosystems, to understand community persistence. In particular, our results indicate that ongoing losses of genetic diversity may induce critical transitions in the persistence and functioning of ecosystems. 
 
-### **One-sentence summary**: A single gene controls a tipping point in an experimental food web.
+### **One-sentence summary**: A single gene controls the diversity of species in an experimental food web.
 
 ### Please see the main text and supplementary materials of the manuscript for details.

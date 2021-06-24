@@ -1,0 +1,293 @@
+---
+title: "Food-web persistence"
+author: "Matthew Barbour"
+date: "`r Sys.Date()`"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+
+# load required libraries
+library(tidyverse) # for data management
+library(cowplot)
+library(survival)
+library(coxme)
+library(survminer)
+library(broom)
+library(ehahelper) # for tidy.coxme
+library(survMisc)
+
+# set ggplot theme
+theme_set(theme_cowplot())
+
+# from https://stackoverflow.com/questions/17274163/extract-aic-from-coxme-object-r
+extractAIC.coxme <- function(x){
+  loglik <- x$loglik + c(0, 0, x$penalty)
+  chi1 <- 2*diff(loglik[1:2]) 
+  chi2 <- 2*diff(loglik[c(1,3)])
+  c(chi1 - 2*x$df[1], chi2 - 2*x$df[2])
+}
+```
+
+# Wrangle data
+
+```{r}
+# Load and manage data
+df <- read_csv("data/InsectAbundanceSurvival.csv") %>%
+  # renaming for brevity
+  rename(cage = Cage,
+         com = Composition,
+         week = Week,
+         temp = Temperature,
+         rich = Richness) %>%
+  mutate(cage = as.character(cage),
+         temp = ifelse(temp=="20 C", 0, 3), # put on scale such that coef corresponds to 1 C increase
+         temp_com = paste(temp, com)) %>% # create indicator for genetic composition nested within temperature for random effect
+  arrange(cage, week)
+
+# create data for survival analysis
+survival_df <- df %>%
+  # counter information is not relevant for survival (because it is the same), so we summarise across it
+  group_by(cage, week, temp, rich, Col, gsm1, AOP2, AOP2.gsoh, com, temp_com) %>%
+  summarise_at(vars(BRBR_Survival, LYER_Survival, Mummy_Ptoids_Survival), list(mean)) %>%
+  ungroup() %>%
+  mutate(week_since = week - 2) %>% # week since the full community was added (at week 3)
+  filter(week_since > 0) %>%
+  mutate(interval_start = week_since - 1,
+         interval_stop = week_since) %>%
+  #select(-week_since) %>% # no longer needed, replaced by interval_start(stop)
+  # contrasts for allelic effects at each gene
+  mutate(aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
+         mam1_vs_MAM1 = gsm1 - Col,
+         gsoh_vs_GSOH = AOP2.gsoh - AOP2) 
+
+## species specific data sets ----
+
+# these will be recombined later to assess extinction across species
+# these are in "person-period" format, which is most suitable for discrete-time survival analysis
+# note that we transform them to make them appropriate for the continuous-time Cox model.
+
+# BRBR 
+BRBR_survival_df <- survival_df %>%
+  select(-LYER_Survival, -Mummy_Ptoids_Survival) %>%
+  na.omit() %>%
+  mutate(Extinction = ifelse(BRBR_Survival == 1, 0, 1))
+
+# LYER
+LYER_survival_df <- survival_df %>%
+  select(-BRBR_Survival, -Mummy_Ptoids_Survival) %>%
+  na.omit() %>%
+  mutate(Extinction = ifelse(LYER_Survival == 1, 0, 1))
+
+# Ptoid
+Ptoid_survival_df <- survival_df %>%
+  select(-BRBR_Survival, -LYER_Survival) %>%
+  na.omit() %>%
+  mutate(Extinction = ifelse(Mummy_Ptoids_Survival == 1, 0, 1))
+
+# merge species
+all_survival_df <- bind_rows(
+  mutate(BRBR_survival_df, species = "BRBR"),
+  mutate(LYER_survival_df, species = "LYER"),
+  mutate(Ptoid_survival_df, species = "Ptoid"))
+
+## create data for cox analysis (continuous time) ----
+
+# BRBR
+BRBR_cox_df <- BRBR_survival_df %>%
+ arrange(cage, week) %>% 
+ group_by(cage) %>% 
+ summarise(across(everything(), last))
+sum(BRBR_cox_df$Extinction) # 60, as it should be
+select(BRBR_cox_df, com, cage, week_since, Extinction) %>% data.frame() # good, no zeros
+
+# LYER
+LYER_cox_df <- LYER_survival_df %>%
+ arrange(cage, week) %>% 
+ group_by(cage) %>% 
+ summarise(across(everything(), last))
+sum(LYER_cox_df$Extinction) # 28, as it should be
+select(LYER_cox_df, com, cage, week_since, Extinction) %>% data.frame() # good, all zeros correspond to week 15, the last week of the experiment in terms of 'week_since'
+
+# Ptoid
+Ptoid_cox_df <- Ptoid_survival_df %>%
+ arrange(cage, week) %>% 
+ group_by(cage) %>% 
+ summarise(across(everything(), last))
+sum(Ptoid_cox_df$Extinction) # 53, as it should be
+select(Ptoid_cox_df, com, cage, week_since, Extinction) %>% data.frame() # good, all zeros correspond to week 15
+
+# merge continuous data
+all_cox_df <- bind_rows(
+  mutate(BRBR_cox_df, species = "BRBR"), 
+  mutate(LYER_cox_df, species = "LYER"),
+  mutate(Ptoid_cox_df, species = "Ptoid")) %>%
+  select(cage, temp:temp_com, week_since, aop2_vs_AOP2:gsoh_vs_GSOH, species, Extinction) %>%
+  mutate(temp_species = paste(temp, species)) %>%
+  arrange(cage)
+# all looks good
+select(all_cox_df, cage, species, week_since, Extinction) %>% data.frame()
+# data is 180 rows as it should (60 cages * 3 species)
+```
+
+# Stratified Cox proportional-hazards model
+
+Fit initial model:
+
+```{r}
+# initial model, proportional hazards assumption
+cox.zph(coxph(Surv(week_since, Extinction) ~ strata(species) + temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + cluster(cage), all_cox_df)) 
+# clear evidence that temperature violates the proportional hazards assumption
+cox.zph(coxph(Surv(week_since, Extinction) ~ strata(species, temp) + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + cluster(cage), all_cox_df))
+# proportional hazards assumption is met for the global model and each covariate.
+```
+
+Since our temperature treatment violated the proportional hazards assumption, we stratified by species and temperature in subsequent models. Note that we don't have to retest the cox proportional hazards assumption because the strata remain the same and clustering doesn't affect this test.
+
+```{r}
+# cluster at com level, for testing genetic effects
+coxph_com <- coxph(Surv(week_since, Extinction) ~ strata(species, temp) + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + cluster(com), all_cox_df)
+summary(coxph_com)
+
+# cluster at cage
+coxph_cage <- coxph(Surv(week_since, Extinction) ~ strata(species, temp) + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + cluster(cage), all_cox_df)
+summary(coxph_cage) # output for Table S1
+
+# show that AICc gives same inference to satisfy a reviewer
+AICcmodavg::aictab(list(full = coxph_cage, 
+                        reduced = update(coxph_cage, .~. -mam1_vs_MAM1 -gsoh_vs_GSOH), 
+                        null = update(coxph_cage, .~. -mam1_vs_MAM1 -gsoh_vs_GSOH -rich -aop2_vs_AOP2)))
+
+# account for aop2 genotype effect first
+summary(coxph(Surv(week_since, Extinction) ~ strata(species, temp) + I(Col+gsm1) + rich + cluster(cage), all_cox_df))
+
+# cluster at cage, interactions with strata
+coxph_cage_by_tempstrata <- coxph(Surv(week_since, Extinction) ~ strata(species) + strata(temp)*(rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH) + cluster(cage), all_cox_df)
+
+# assume each row of data is independent (which of course isn't true, 3 species per cage)
+coxph_indep <- coxph(Surv(week_since, Extinction) ~ strata(species, temp) + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH, all_cox_df)
+summary(coxph_indep)
+anova(coxph_indep)
+
+# note that likelihood estimates are the same among all coxph models, clearly indicating that the likelihood ratio test doesn't account for clustered variables
+coxph_com$loglik
+coxph_cage$loglik
+coxph_indep$loglik
+
+# random effect of cage
+coxme_cage <- coxme(Surv(week_since, Extinction) ~ strata(species, temp) + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + (1|cage), all_cox_df)
+summary(coxme_cage)
+# note that if we formally compare models, there is not clear evidence to include cage as a random effect
+anova(coxph_cage, coxme_cage)
+
+# random effect of cage, com, and temp_com
+coxme_allRE <- coxme(Surv(week_since, Extinction) ~ strata(species, temp) + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + (1|com/temp/cage), all_cox_df)
+summary(coxme_allRE)
+# certainly not good evidence to support this more complex model
+anova(coxme_cage, coxme_allRE)
+```
+
+## Reproduce Fig. 2
+
+```{r}
+tidy_coxph_cage <- tidy(coxph_cage, exponentiate = T, conf.int = T, conf.level = 0.95) %>% 
+  mutate(model = "cluster(cage)",
+         SE = robust.se)
+
+plot_keystone_gene <- tidy_coxph_cage %>%
+  filter(term != "rich") %>%
+  ggplot(aes(x = term, y = estimate)) +
+  geom_point(size = 3) +
+  geom_linerange(aes(ymin = estimate - SE, ymax = estimate + SE), size = 1.5) +
+  geom_linerange(aes(ymin = conf.low, ymax = conf.high)) +
+  geom_hline(yintercept = 1, linetype = "dotted") +
+  scale_x_discrete(labels = c(expression(italic(AOP2)),expression(italic(MAM1)),expression(italic(GSOH)))) +
+  scale_y_continuous(name = expression("Extinction rate ratio"), trans = "log", breaks = c(0.8, 1.0, 1.2, 1.4)) + 
+  xlab("")
+
+x11(); plot_keystone_gene
+#ggsave(plot = plot_keystone_gene, filename = "figures/keystone-gene.pdf", height = 5, width = 6)
+```
+
+## Reproduce Fig. S1
+
+```{r}
+tidy_coxph_com <- tidy(coxph_com, exponentiate = T, conf.int = T, conf.level = 0.95) %>% 
+  mutate(model = "cluster(com)",
+         SE = robust.se)
+tidy_coxph_indep <- tidy(coxph_indep, exponentiate = T, conf.int = T, conf.level = 0.95) %>% 
+  mutate(model = "independent",
+         SE = std.error)
+tidy_coxme_cage <- tidy(coxme_cage, exponentiate = T, conf.level = 0.95) %>% 
+  mutate(model = "(1|cage)",
+         SE = std.error)
+tidy_coxme_allRE <- tidy(coxme_allRE, exponentiate = T, conf.level = 0.95) %>% 
+  mutate(model = "(1|com/temp/cage)",
+         SE = std.error)
+
+plot_fig_S1 <- bind_rows(tidy_coxph_com, tidy_coxph_cage, tidy_coxph_indep, tidy_coxme_cage, tidy_coxme_allRE) %>%
+  mutate(model = factor(model, levels = c("cluster(com)","cluster(cage)","independent","(1|cage)","(1|com/temp/cage)"))) %>%
+  filter(term != "rich") %>%
+  ggplot(aes(x = term, y = estimate, group = model, color = model)) +
+  geom_point(size = 3, position = position_dodge(width = 0.5)) +
+  geom_linerange(aes(ymin = estimate - SE, ymax = estimate + SE), size = 1.5, position = position_dodge(width = 0.5)) +
+  geom_linerange(aes(ymin = conf.low, ymax = conf.high), position = position_dodge(width = 0.5)) +
+  geom_hline(yintercept = 1, linetype = "dotted") +
+  scale_x_discrete(labels = c(expression(italic(AOP2)),expression(italic(MAM1)),expression(italic(GSOH)))) +
+  #scale_y_continuous(name = expression("Effect on extinction rate "(Delta~"%")), trans = "log", breaks = c(0.8, 1.0, 1.2, 1.4), labels = c(-20,0,20,40)) +  # -percent.pdf
+  scale_y_continuous(name = expression("Extinction rate ratio"), trans = "log", breaks = c(0.8, 1.0, 1.2, 1.4)) + # -ratio.pdf
+  scale_color_viridis_d(name = "Model") +
+  xlab("")
+
+x11(); plot_fig_S1
+#ggsave(plot = plot_fig_S1, filename = "figures/keystone-effect-model-comparison-ratio.pdf", height = 5, width = 6)
+```
+
+## Reproduce Fig. S2 and S3
+
+```{r}
+# need to convert to data frame from a tibble for plotting (known issue: https://github.com/kassambara/survminer/issues/501)
+all_cox_df.df <- as.data.frame(all_cox_df) %>%
+  mutate(aop2_genos = Col+gsm1)
+
+# add aop2 information to genetic composition
+com_aop2 <- select(all_cox_df.df, variable = com, rich, aop2_genos, aop2_vs_AOP2) %>% distinct()
+
+# get adjusted survival curves for each genetic composition
+com_surv_adj <- surv_adjustedcurves(coxph(Surv(week_since, Extinction) ~ strata(temp, species) + com + cluster(cage), data = all_cox_df.df), variable = "com", method = "conditional") %>%
+  left_join(., com_aop2)
+
+aop2_surv_adj <- surv_adjustedcurves(coxph(Surv(week_since, Extinction) ~ strata(temp, species) + aop2_genos + cluster(cage), data = all_cox_df.df), variable = "aop2_genos", method = "conditional") %>%
+  mutate(aop2_genos = as.numeric(variable)-1)
+
+## Reproduce Fig. S2
+# without rich = 4 to emphasize keystone gene effect
+plot_fig_S2 <- com_surv_adj %>%
+  filter(rich != 4) %>% 
+  mutate(frich = factor(rich, levels = c(1,2), labels = c("Richness = 1","Richness = 2"))) %>%
+  ggplot(aes(x = time+2, y = surv)) + 
+  geom_step(aes(group = variable, color = aop2_vs_AOP2), size = 1) +
+  scale_color_viridis_c(breaks = c(-2,-1,0,1,2), name = "AOP2\u2013 vs. AOP2+") +
+  ylab("Survival probability") +
+  scale_x_continuous(name = "Week of experiment") + # , breaks = 2:17
+  facet_wrap(~frich, nrow = 1)
+x11(); plot_fig_S2
+#ggsave(plot = plot_fig_S2, filename = "figures/keystone-coxadjcurve.pdf", width = 6, height = 5, device=cairo_pdf)
+
+## Reproduce Fig. S3
+# ideal thing about this plot is that it properly adjusts for strata and it displays uncertainty at the level of genetic composition.
+# confidence intervals from the kaplan meir plot are incorrect because they don't account for strata (this was confirmed by looking at survdiff log-rank test)
+plot_fig_S3 <- ggplot(com_surv_adj, aes(x = time+2, y = surv)) + 
+  geom_step(aes(group = variable, color = aop2_genos), alpha = 0.5) +
+  geom_step(data = aop2_surv_adj, aes(group = aop2_genos, color = aop2_genos), size = 1.5) +
+  scale_color_viridis_c(breaks = c(0,1,2), name = "AOP2\u2013\ngenotypes") +
+  ylab("Survival probability") +
+  scale_x_continuous(name = "Week of experiment", breaks = 2:17)
+x11(); plot_fig_S3
+#ggsave(plot = plot_fig_S3, filename = "figures/aop2-genos-coxadjcurve.pdf", width = 6, height = 5, device=cairo_pdf)
+
+
+```

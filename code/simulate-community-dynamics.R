@@ -47,8 +47,43 @@ SimulateCommunityDynamics <- function(IGR.Vector, Interaction.Matrix, Duration){
       tmp.Nt1[3,] <- tmp.Nt1[3,] + log(2)
       Nt1[[i]] <- tmp.Nt1
     }
-    if(i > 3){
+    if(i > 3){ # should this be i > 4?
       Nt1[[i]] <- IGR.Vector + Interaction.Matrix %*% Nt1[[i-1]]
+    }
+  }
+  Nt1[[1]] <- rbind(Nt1[[1]], Ptoid = 0)
+  Nt1[[2]] <- rbind(Nt1[[2]], Ptoid = 0)
+  Nt1.df <- t(as.data.frame(Nt1)) %>%
+    as_tibble() %>%
+    mutate(Week = 0:(length(Nt1)-1))
+}
+
+SimulateCommunityDynamicsDelay <- function(IGR.Vector, Interaction.Matrix, Delay.Matrix, Duration){
+
+  # initial addition of herbivores into the experiment, 4 individuals of each species
+  initial_state <- matrix(c(log(4), log(4)), nrow = 2, dimnames = list(c("BRBR","LYER"),"r"))
+
+  # for loop of temporal dynamics
+  Nt1 <- list() # abundance at next time step
+  for(i in 1:Duration){
+    if(i == 1){
+      Nt1[[i]] <- initial_state
+    }
+    if(i == 2){
+      Nt1[[i]] <- IGR.Vector[1:2,] + Interaction.Matrix[1:2,1:2] %*% Nt1[[i-1]] # not possible yet + Delay.Matrix[1:2,1:2] %*% Nt1[[i-2]]
+    }
+    if(i == 3){
+      tmp.Nt1 <- IGR.Vector[1:2,] + Interaction.Matrix[1:2,1:2] %*% Nt1[[i-1]] + Delay.Matrix[1:2,1:2] %*% Nt1[[i-2]]
+      Nt1[[i]] <- rbind(tmp.Nt1, Ptoid = log(2))
+    }
+    if(i == 4){
+      tmp.Nt1 <- IGR.Vector + Interaction.Matrix %*% Nt1[[i-1]]
+      tmp.Nt1[1:2, ] <- tmp.Nt1[1:2, ] + Delay.Matrix[1:2,1:2] %*% Nt1[[i-2]] # Delay.Matrix constrained to 1:2 because Ptoid isn't present at i-2 yet
+      tmp.Nt1[3,] <- tmp.Nt1[3,] + log(2)
+      Nt1[[i]] <- tmp.Nt1
+    }
+    if(i > 4){ # changed from i > 3
+      Nt1[[i]] <- IGR.Vector + Interaction.Matrix %*% Nt1[[i-1]] + Delay.Matrix %*% Nt1[[i-2]]
     }
   }
   Nt1[[1]] <- rbind(Nt1[[1]], Ptoid = 0)
