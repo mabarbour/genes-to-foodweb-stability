@@ -9,11 +9,11 @@
 <meta http-equiv="X-UA-Compatible" content="IE=EDGE" />
 
 
-<meta name="author" content="Matthew A. Barbour" />
+<meta name="author" content="Matthew Barbour" />
 
 <meta name="date" content="2022-01-24" />
 
-<title>Plant growth in the absence of insects</title>
+<title>Mark-recapture analysis</title>
 
 <script src="site_libs/header-attrs-2.11/header-attrs.js"></script>
 <script src="site_libs/jquery-3.6.0/jquery-3.6.0.min.js"></script>
@@ -37,8 +37,6 @@
 <script src="site_libs/navigation-1.1/tabsets.js"></script>
 <link href="site_libs/highlightjs-9.12.0/textmate.css" rel="stylesheet" />
 <script src="site_libs/highlightjs-9.12.0/highlight.js"></script>
-<script src="site_libs/kePrint-0.0.1/kePrint.js"></script>
-<link href="site_libs/lightable-0.0.1/lightable.css" rel="stylesheet" />
 <link href="site_libs/font-awesome-5.1.0/css/all.css" rel="stylesheet" />
 <link href="site_libs/font-awesome-5.1.0/css/v4-shims.css" rel="stylesheet" />
 
@@ -360,8 +358,8 @@ div.tocify {
 
 
 
-<h1 class="title toc-ignore">Plant growth in the absence of insects</h1>
-<h4 class="author">Matthew A. Barbour</h4>
+<h1 class="title toc-ignore">Mark-recapture analysis</h1>
+<h4 class="author">Matthew Barbour</h4>
 <h4 class="date">2022-01-24</h4>
 
 </div>
@@ -521,7 +519,7 @@ Note that any generated files, e.g. HTML, png, CSS, etc., are not included in t
 <div id="versions" class="tab-pane fade">
 
 <p>
-These are the previous versions of the repository in which changes were made to the R Markdown (<code>analysis/plant-growth-no-insects-lme.Rmd</code>) and HTML (<code>docs/plant-growth-no-insects-lme.html</code>) files. If you’ve configured a remote Git repository (see <code>?wflow_git_remote</code>), click on the hyperlinks in the table below to view the files as they were in that past version.
+These are the previous versions of the repository in which changes were made to the R Markdown (<code>analysis/mark-recapture.Rmd</code>) and HTML (<code>docs/mark-recapture.html</code>) files. If you’ve configured a remote Git repository (see <code>?wflow_git_remote</code>), click on the hyperlinks in the table below to view the files as they were in that past version.
 </p>
 <div class="table-responsive">
 <table class="table table-condensed table-hover">
@@ -550,7 +548,7 @@ Message
 Rmd
 </td>
 <td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/18d1722d7dcde36ecc1f5b5c58c1fd8614f15ed4/analysis/plant-growth-no-insects-lme.Rmd" target="_blank">18d1722</a>
+<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/18d1722d7dcde36ecc1f5b5c58c1fd8614f15ed4/analysis/mark-recapture.Rmd" target="_blank">18d1722</a>
 </td>
 <td>
 mabarbour
@@ -562,57 +560,6 @@ mabarbour
 Add mark-recapture and omnibus tests, fix data point error, update analyses, and edit readme
 </td>
 </tr>
-<tr>
-<td>
-html
-</td>
-<td>
-<a href="https://rawcdn.githack.com/mabarbour/genes-to-foodweb-stability/c802852f63ae3f592b07d40ddd72d32b430c5109/docs/plant-growth-no-insects-lme.html" target="_blank">c802852</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2021-06-24
-</td>
-<td>
-Build website
-</td>
-</tr>
-<tr>
-<td>
-Rmd
-</td>
-<td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/a054471b4170984d1b821980756493e2a94c3bef/analysis/plant-growth-no-insects-lme.Rmd" target="_blank">a054471</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2021-06-24
-</td>
-<td>
-Update location of .rds files to Release v2.1
-</td>
-</tr>
-<tr>
-<td>
-Rmd
-</td>
-<td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/f467085443e4e5bd43261b8aabd7a86b7bc18c31/analysis/plant-growth-no-insects-lme.Rmd" target="_blank">f467085</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2021-06-24
-</td>
-<td>
-Revise analysis to address reviewer’s comments
-</td>
-</tr>
 </tbody>
 </table>
 </div>
@@ -622,406 +569,178 @@ Revise analysis to address reviewer’s comments
 </div>
 <div id="wrangle-data" class="section level1">
 <h1>Wrangle data</h1>
-<pre class="r"><code># load data
-ChamberNoInsectsDF &lt;- read_csv(&quot;data/PreExperimentNoInsectsPlantBiomass.csv&quot;) %&gt;%
-  mutate(Cage = as.character(Cage),
-         Pot = as.character(Pot))
+<pre class="r"><code># load and manage data
+df &lt;- read_csv(&quot;data/InsectAbundanceSurvival.csv&quot;) %&gt;%
+  # renaming for brevity
+  rename(cage = Cage,
+         com = Composition,
+         week = Week,
+         temp = Temperature,
+         rich = Richness) %&gt;%
+  mutate(cage = as.character(cage),
+         temp = ifelse(temp==&quot;20 C&quot;, 0, 3), # put on scale such that coef corresponds to 1 C increase
+         temp_com = paste(temp, com)) %&gt;% # create indicator for genetic composition nested within temperature for random effect
+  arrange(cage, week)
 
-# conduct analyses at cage level
-CageLevelBiomass &lt;- ChamberNoInsectsDF %&gt;%
-  # sum biomass across both pots
-  group_by(Cage, Temperature, Richness, Composition, Col, gsm1, AOP2, AOP2.gsoh) %&gt;%
-  summarise_at(vars(Biomass_g), list(sum)) %&gt;%
-  # tidy data
+# create data for survival analysis
+survival_df &lt;- df %&gt;%
+  # counter information is not relevant for survival (because it is the same), so we summarise across it
+  group_by(cage, week, temp, rich, Col, gsm1, AOP2, AOP2.gsoh, com, temp_com) %&gt;%
+  summarise_at(vars(BRBR, LYER, Mummy_Ptoids, BRBR_Survival, LYER_Survival, Mummy_Ptoids_Survival), list(mean)) %&gt;%
   ungroup() %&gt;%
-  select(cage = Cage, temp = Temperature, rich = Richness, com = Composition, Col, gsm1, AOP2, AOP2.gsoh, Biomass_g) %&gt;%
-  # adjust temp and rich so effect of +1 C is comparable to +1 genotype
-  mutate(temp = ifelse(temp == &quot;20 C&quot;, 0, 3),
-         rich = rich - 1,
-         # define orthogonal constrasts to test for above-average allele effects.
-        # aop2_vs_AOP2 must be included first
-        aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
-        mam1_vs_MAM1 = gsm1 - Col, # aop2_vs_AOP2 must be included in model
-        gsoh_vs_GSOH = AOP2.gsoh - AOP2)</code></pre>
+  mutate(week_since = week - 2) %&gt;% # week since the full community was added (at week 3)
+  filter(week_since &gt; 0) %&gt;%
+  mutate(interval_start = week_since - 1,
+         interval_stop = week_since) %&gt;%
+  # contrasts for allelic effects at each gene
+  mutate(aop2_vs_AOP2 = Col + gsm1 - AOP2 - AOP2.gsoh,
+         mam1_vs_MAM1 = gsm1 - Col,
+         gsoh_vs_GSOH = AOP2.gsoh - AOP2)
+
+mark_recap_wide_df &lt;- survival_df %&gt;%
+  # include apparent extinctions. Note that at week 3, parasitoids were still being added, which is 
+  mutate(BRBR = ifelse(is.na(BRBR_Survival) == T, 0,
+                       ifelse(BRBR_Survival == 1 &amp; BRBR == 0, 0, BRBR_Survival)),
+         LYER = ifelse(is.na(LYER_Survival) == T, 0,
+                       ifelse(LYER_Survival == 1 &amp; week &lt; 17 &amp; LYER == 0, 0, LYER_Survival)),
+         Mummy_Ptoids = ifelse(is.na(Mummy_Ptoids_Survival) == T, 0,
+                               ifelse(Mummy_Ptoids_Survival == 1 &amp; week &gt; 3 &amp; week &lt; 17 &amp; Mummy_Ptoids == 0, 0, Mummy_Ptoids_Survival))) %&gt;%
+  select(cage, week, temp:temp_com, aop2_vs_AOP2:gsoh_vs_GSOH, BRBR, LYER, Mummy_Ptoids) %&gt;%
+  pivot_longer(cols = c(BRBR, LYER, Mummy_Ptoids), names_to = &quot;species&quot;, values_to = &quot;survival&quot;) %&gt;%
+  pivot_wider(names_from = &quot;week&quot;, values_from = &quot;survival&quot;)
+
+# prepare for marked package
+marked_df &lt;- mark_recap_wide_df %&gt;%
+  unite(`3`:`17`, col = &quot;ch&quot;, sep = &quot;&quot;, remove = F) %&gt;% # encounter history
+  mutate(species = factor(species),
+         temp = factor(temp)) %&gt;%
+  select(ch, species, temp, rich, aop2_vs_AOP2) %&gt;%
+  as.data.frame()</code></pre>
 </div>
-<div id="reproduce-table-s5" class="section level1">
-<h1>Reproduce Table S5</h1>
-<pre class="r"><code># fit model
-log_biomass_lmer &lt;- lmer(log(Biomass_g) ~ temp*(rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH) + (1|com/temp), 
-                        data = CageLevelBiomass)
+<div id="cormack-jolly-seber-capture-recapture-model" class="section level1">
+<h1>Cormack-Jolly-Seber capture-recapture model</h1>
+<pre class="r"><code># process data (and set grouping variables)
+marked.proc &lt;- process.data(marked_df, 
+                            model = &quot;CJS&quot;,
+                            group = c(&quot;species&quot;,&quot;temp&quot;))
 
-# reproduce table S5
-anova(log_biomass_lmer, type = &quot;1&quot;, ddf = &quot;Kenward-Roger&quot;) %&gt;%
-  kable(., caption = &quot;Analysis of variance for plant biomass (log transformed) in the absence of insects.&quot;, booktabs = T) %&gt;%
-  kable_styling(latex_options = c(&quot;striped&quot;, &quot;hold_position&quot;))</code></pre>
-<table class="table" style="margin-left: auto; margin-right: auto;">
-<caption>
-Analysis of variance for plant biomass (log transformed) in the absence of insects.
-</caption>
-<thead>
-<tr>
-<th style="text-align:left;">
-</th>
-<th style="text-align:right;">
-Sum Sq
-</th>
-<th style="text-align:right;">
-Mean Sq
-</th>
-<th style="text-align:right;">
-NumDF
-</th>
-<th style="text-align:right;">
-DenDF
-</th>
-<th style="text-align:right;">
-F value
-</th>
-<th style="text-align:right;">
-Pr(&gt;F)
-</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td style="text-align:left;">
-temp
-</td>
-<td style="text-align:right;">
-4.2342063
-</td>
-<td style="text-align:right;">
-4.2342063
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.220228
-</td>
-<td style="text-align:right;">
-52.8748142
-</td>
-<td style="text-align:right;">
-0.0006393
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-rich
-</td>
-<td style="text-align:right;">
-0.0110385
-</td>
-<td style="text-align:right;">
-0.0110385
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-4.951544
-</td>
-<td style="text-align:right;">
-0.1378439
-</td>
-<td style="text-align:right;">
-0.7257894
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-aop2_vs_AOP2
-</td>
-<td style="text-align:right;">
-1.2616246
-</td>
-<td style="text-align:right;">
-1.2616246
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.791912
-</td>
-<td style="text-align:right;">
-15.7545862
-</td>
-<td style="text-align:right;">
-0.0079189
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-mam1_vs_MAM1
-</td>
-<td style="text-align:right;">
-0.0410509
-</td>
-<td style="text-align:right;">
-0.0410509
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.791912
-</td>
-<td style="text-align:right;">
-0.5126251
-</td>
-<td style="text-align:right;">
-0.5018356
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-gsoh_vs_GSOH
-</td>
-<td style="text-align:right;">
-0.0148935
-</td>
-<td style="text-align:right;">
-0.0148935
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.791912
-</td>
-<td style="text-align:right;">
-0.1859833
-</td>
-<td style="text-align:right;">
-0.6818684
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:rich
-</td>
-<td style="text-align:right;">
-0.0097817
-</td>
-<td style="text-align:right;">
-0.0097817
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-4.427930
-</td>
-<td style="text-align:right;">
-0.1221488
-</td>
-<td style="text-align:right;">
-0.7427133
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:aop2_vs_AOP2
-</td>
-<td style="text-align:right;">
-0.0035946
-</td>
-<td style="text-align:right;">
-0.0035946
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.647776
-</td>
-<td style="text-align:right;">
-0.0448871
-</td>
-<td style="text-align:right;">
-0.8396490
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:mam1_vs_MAM1
-</td>
-<td style="text-align:right;">
-0.0541709
-</td>
-<td style="text-align:right;">
-0.0541709
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.647776
-</td>
-<td style="text-align:right;">
-0.6764608
-</td>
-<td style="text-align:right;">
-0.4441364
-</td>
-</tr>
-<tr>
-<td style="text-align:left;">
-temp:gsoh_vs_GSOH
-</td>
-<td style="text-align:right;">
-0.0669588
-</td>
-<td style="text-align:right;">
-0.0669588
-</td>
-<td style="text-align:right;">
-1
-</td>
-<td style="text-align:right;">
-5.647776
-</td>
-<td style="text-align:right;">
-0.8361506
-</td>
-<td style="text-align:right;">
-0.3978575
-</td>
-</tr>
-</tbody>
-</table>
-<pre class="r"><code># omnibus test compared to null (reported in Notes section)
-log_biomass_null &lt;- lmer(log(Biomass_g) ~ 1 + (1|com/temp), data = CageLevelBiomass)
-KRmodcomp(log_biomass_lmer, log_biomass_null)</code></pre>
-<pre><code>large : log(Biomass_g) ~ temp * (rich + aop2_vs_AOP2 + mam1_vs_MAM1 + 
-    gsoh_vs_GSOH) + (1 | com/temp)
-small : log(Biomass_g) ~ 1 + (1 | com/temp)
-        stat    ndf    ddf F.scaling p.value  
-Ftest 7.4483 9.0000 5.9911    0.9438 0.01197 *
----
-Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1</code></pre>
-<pre class="r"><code># omnibust test main vs null
-log_biomass_main &lt;- lmer(log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + (1|com/temp), data = CageLevelBiomass)
-KRmodcomp(log_biomass_main, log_biomass_null)</code></pre>
-<pre><code>large : log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + 
-    gsoh_vs_GSOH + (1 | com/temp)
-small : log(Biomass_g) ~ 1 + (1 | com/temp)
-         stat     ndf     ddf F.scaling  p.value   
-Ftest 17.0402  5.0000  6.6068   0.95932 0.001122 **
----
-Signif. codes:  0 &#39;***&#39; 0.001 &#39;**&#39; 0.01 &#39;*&#39; 0.05 &#39;.&#39; 0.1 &#39; &#39; 1</code></pre>
-<pre class="r"><code>KRmodcomp(log_biomass_lmer, log_biomass_main)</code></pre>
-<pre><code>large : log(Biomass_g) ~ temp * (rich + aop2_vs_AOP2 + mam1_vs_MAM1 + 
-    gsoh_vs_GSOH) + (1 | com/temp)
-small : log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + 
-    gsoh_vs_GSOH + (1 | com/temp)
-        stat    ndf    ddf F.scaling p.value
-Ftest 0.4197 4.0000 5.2877   0.99955  0.7897</code></pre>
-</div>
-<div id="reproduce-fig.-s10" class="section level1">
-<h1>Reproduce Fig. S10</h1>
-<pre class="r"><code># calculate 95% confidence intervals, but first remove higher-order statistical interactions
-summary(lme4::lmer(log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + (1|com), data = CageLevelBiomass)) # dropped com:temp, because it was singular, it also doesn&#39;t matter for estimating confidence intervals for genetic effect, it would matter if we were trying to estimate temp, which we are only controlling for here.</code></pre>
-<pre><code>Linear mixed model fit by REML [&#39;lmerMod&#39;]
-Formula: log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + (1 | com)
-   Data: CageLevelBiomass
+# make design data (from processed data)
+marked.ddl &lt;- make.design.data(marked.proc)
 
-REML criterion at convergence: 39.1
+# outline formulas for each parameter
+Phi.form &lt;- list(formula = ~species + temp + time + rich + aop2_vs_AOP2) # allow survival probability (Phi) to vary by species, temperature treatment, and time, as well as genetic diversity (rich) and AOP2 gene. 
+p.form &lt;- list(formula=~species) # allow capture probability (p) to vary among species, which makes sense since some species are harder to detect than others (e.g. LYER prefers to hide underneath basal rosette compared to BRBR).
 
-Scaled residuals: 
-    Min      1Q  Median      3Q     Max 
--2.7409 -0.4813  0.1360  0.5751  2.4735 
+# make model
+cjs.model &lt;- crm(marked.proc, 
+                 marked.ddl,
+                 model.parameters = list(Phi = Phi.form, 
+                                         p = p.form),
+                 accumulate = FALSE)</code></pre>
+<pre><code>
+ Number of evaluations:  100  -2lnl: 1584.559464
+ Number of evaluations:  200  -2lnl:  1545.61225
+ Number of evaluations:  300  -2lnl:   1545.1513
+ Number of evaluations:  400  -2lnl: 1544.552532
+ Number of evaluations:  500  -2lnl: 1544.263366
+ Number of evaluations:  600  -2lnl: 1543.941381
+ Number of evaluations:  700  -2lnl: 1543.877974
+ Number of evaluations:  800  -2lnl: 1543.737575
+ Number of evaluations:  900  -2lnl: 1543.702892
+ Number of evaluations:  1000  -2lnl:  1543.66882
+ Number of evaluations:  1100  -2lnl: 1543.614795
+ Number of evaluations:  1200  -2lnl: 1543.603781
+ Number of evaluations:  1300  -2lnl: 1543.599523
+ Number of evaluations:  1400  -2lnl: 1543.599059
+ Number of evaluations:  1500  -2lnl: 1543.598867
+ Number of evaluations:  1600  -2lnl: 1543.599425
+ Number of evaluations:  1700  -2lnl:  1543.59882
+ Number of evaluations:  1800  -2lnl: 1543.851487
+ Number of evaluations:  1900  -2lnl: 1544.902988
+ Number of evaluations:  2000  -2lnl: 1543.747498
+ Number of evaluations:  2100  -2lnl: 1546.793019
+ Number of evaluations:  2200  -2lnl:  1543.93277
+ Number of evaluations:  2300  -2lnl: 1543.726229
+ Number of evaluations:  2400  -2lnl: 1543.608845
+ Number of evaluations:  2500  -2lnl: 1544.570045
+ Number of evaluations:  2600  -2lnl: 1544.099186
+ Number of evaluations:  2700  -2lnl: 1546.276039
+ Number of evaluations:  2800  -2lnl:  1543.60815
+ Number of evaluations:  2900  -2lnl: 1546.353122
+ Number of evaluations:  3000  -2lnl: 1543.602188
+ Number of evaluations:  3100  -2lnl: 1543.644212
+ Number of evaluations:  3200  -2lnl: 1544.812579
+ Number of evaluations:  3300  -2lnl: 1548.032423
+ Number of evaluations:  3400  -2lnl: 1543.885738
+ Number of evaluations:  3500  -2lnl: 1546.171215
+ Number of evaluations:  3600  -2lnl: 1543.598834
+ Number of evaluations:  3700  -2lnl: 1543.598829</code></pre>
+<pre class="r"><code>cjs.model</code></pre>
+<pre><code>
+crm Model Summary
 
-Random effects:
- Groups   Name        Variance Std.Dev.
- com      (Intercept) 0.009476 0.09735 
- Residual             0.081126 0.28483 
-Number of obs: 60, groups:  com, 11
+Npar :  22
+-2lnL:  1543.599
+AIC  :  1587.599
 
-Fixed effects:
-             Estimate Std. Error t value
-(Intercept)  -0.05210    0.07843  -0.664
-temp         -0.21085    0.02451  -8.601
-rich         -0.02374    0.05456  -0.435
-aop2_vs_AOP2  0.19691    0.04554   4.324
-
-Correlation of Fixed Effects:
-            (Intr) temp   rich  
-temp        -0.469              
-rich        -0.645  0.000       
-ap2_vs_AOP2  0.000  0.000  0.000</code></pre>
-<pre class="r"><code>aop2_CI &lt;- tidy(lmer(log(Biomass_g) ~ -1 + temp + I(AOP2 + AOP2.gsoh) + I(Col + gsm1) + (1|com), 
-                     data = CageLevelBiomass), 
-                conf.int = T, conf.level = 0.95) %&gt;%
-  filter(term %in% c(&quot;I(AOP2 + AOP2.gsoh)&quot;,&quot;I(Col + gsm1)&quot;)) %&gt;%
-  mutate(allele = c(&quot;AOP2&quot;,&quot;aop2&quot;))
-# note that I back transform to original scale for plotting
-exp(aop2_CI$estimate[2])</code></pre>
-<pre><code>[1] 1.17452</code></pre>
-<pre class="r"><code># get the effect of each genotype
-mean_geno &lt;- tidy(lmer(log(Biomass_g) ~ -1 + temp + AOP2 + AOP2.gsoh + Col + gsm1 + (1|com), 
-                     data = CageLevelBiomass), 
-                conf.int = T, conf.level = 0.95) %&gt;%
-  filter(term %in% c(&quot;AOP2&quot;,&quot;AOP2.gsoh&quot;,&quot;Col&quot;,&quot;gsm1&quot;)) %&gt;%
-  mutate(allele = c(&quot;AOP2&quot;,&quot;AOP2&quot;,&quot;aop2&quot;,&quot;aop2&quot;),
-         term = factor(term, levels = c(&quot;Col&quot;,&quot;gsm1&quot;,&quot;AOP2&quot;,&quot;AOP2.gsoh&quot;), labels = c(&quot;Col&quot;,&quot;gsm1&quot;,&quot;AOP2&quot;,&quot;AOP2/gsoh&quot;)))
-
-# plot on original scale
-# adding a genotype with an aop2 allele to the population doubles the likelihood of species persistence
-plot_AOP2_growth_no_insects &lt;- ggplot(aop2_CI, aes(x = allele, y = exp(estimate))) +
-  geom_point(size = 5) +
-  geom_point(data = mean_geno, aes(color = term), size = 5, position = position_dodge(width = 0.3)) +
-  geom_linerange(aes(ymax = exp(estimate + std.error), ymin = exp(estimate - std.error)), size = 1.5) +
-  geom_linerange(aes(ymax = exp(conf.high), ymin = exp(conf.low))) +
-  scale_x_discrete(labels = c(&quot;AOP2\u2013&quot;,&quot;AOP2+&quot;)) +
-  scale_y_continuous(&quot;Plant biomass (g)&quot;) +
-  xlab(&quot;Allele&quot;) + 
-  scale_color_manual(values = c(&quot;darkgreen&quot;,&quot;steelblue&quot;,&quot;darkorange&quot;,&quot;firebrick1&quot;), name = &quot;&quot;) + 
-  theme_cowplot(font_size = 18, line_size = 1)
-
-x11(); plot_AOP2_growth_no_insects
-
-ggsave(plot = plot_AOP2_growth_no_insects, filename = &quot;figures/AOP2-growth-no-insects.pdf&quot;, height = 6, width = 8, device=cairo_pdf)</code></pre>
-<p><img src="figure/plant-growth-no-insects-lme.Rmd/unnamed-chunk-3-1.png" width="672" style="display: block; margin: auto;" /></p>
-<p>
-<button type="button" class="btn btn-default btn-xs btn-workflowr btn-workflowr-fig" data-toggle="collapse" data-target="#fig-unnamed-chunk-3-1">
-Past versions of unnamed-chunk-3-1.png
-</button>
-</p>
-<div id="fig-unnamed-chunk-3-1" class="collapse">
-<div class="table-responsive">
-<table class="table table-condensed table-hover">
-<thead>
-<tr>
-<th>
-Version
-</th>
-<th>
-Author
-</th>
-<th>
-Date
-</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>
-<a href="https://github.com/mabarbour/genes-to-foodweb-stability/blob/c802852f63ae3f592b07d40ddd72d32b430c5109/docs/figure/plant-growth-no-insects-lme.Rmd/unnamed-chunk-3-1.png" target="_blank">c802852</a>
-</td>
-<td>
-mabarbour
-</td>
-<td>
-2021-06-24
-</td>
-</tr>
-</tbody>
-</table>
-</div>
-</div>
+Beta
+                          Estimate
+Phi.(Intercept)          2.1075944
+Phi.speciesLYER          4.6259506
+Phi.speciesMummy_Ptoids  3.6983825
+Phi.temp3               -0.1453095
+Phi.time2               -0.4730241
+Phi.time3               -1.6930867
+Phi.time4               -3.8969044
+Phi.time5               -5.2260443
+Phi.time6               -4.9839936
+Phi.time7               -4.3399889
+Phi.time8               -3.2078034
+Phi.time9               -3.2543029
+Phi.time10              -3.2087875
+Phi.time11              -3.4619101
+Phi.time12              -4.8579032
+Phi.time13              -5.2365724
+Phi.time14               7.9476065
+Phi.rich                 0.2408103
+Phi.aop2_vs_AOP2         0.2159383
+p.(Intercept)            3.7487139
+p.speciesLYER           -2.3084112
+p.speciesMummy_Ptoids   -1.9112810</code></pre>
+<pre class="r"><code># calculate confidence intervals of parameters
+cjs.CIs &lt;- cjs.hessian(cjs.model)</code></pre>
+<pre><code>
+ Number of evaluations:  100  -2lnl: 1543.745759
+ Number of evaluations:  200  -2lnl: 1544.275828
+ Number of evaluations:  300  -2lnl: 1551.334614
+ Number of evaluations:  400  -2lnl: 1543.990456
+ Number of evaluations:  500  -2lnl: 1544.674277
+ Number of evaluations:  600  -2lnl: 1543.849803
+ Number of evaluations:  700  -2lnl: 1543.986051
+ Number of evaluations:  800  -2lnl: 1543.619508
+ Number of evaluations:  900  -2lnl: 1543.967571
+ Number of evaluations:  1000  -2lnl: 1543.681394
+ Number of evaluations:  1100  -2lnl: 1545.519206
+ Number of evaluations:  1200  -2lnl: 1543.839998
+ Number of evaluations:  1300  -2lnl: 1543.872825
+ Number of evaluations:  1400  -2lnl: 1543.613415
+ Number of evaluations:  1500  -2lnl: 1543.790969
+ Number of evaluations:  1600  -2lnl: 1545.001866
+ Number of evaluations:  1700  -2lnl:  1552.77495
+ Number of evaluations:  1800  -2lnl: 1543.901213
+ Number of evaluations:  1900  -2lnl: 1545.847455
+ Number of evaluations:  2000  -2lnl: 1543.732566</code></pre>
+<pre class="r"><code># we&#39;re primarily interested in the robustness of the aop2 vs AOP2 effect so we focus on it here
+cjs.CIs$results$beta$Phi[c(&quot;aop2_vs_AOP2&quot;)] # logit scale</code></pre>
+<pre><code>aop2_vs_AOP2 
+   0.2159383 </code></pre>
+<pre class="r"><code>exp(cjs.CIs$results$beta$Phi[c(&quot;rich&quot;,&quot;aop2_vs_AOP2&quot;)]) # aop2 increases odds of survival by 24% relative to the average allele.</code></pre>
+<pre><code>        rich aop2_vs_AOP2 
+    1.272280     1.241026 </code></pre>
+<pre class="r"><code>exp(0.4161482) # upper CI (up to 52%)</code></pre>
+<pre><code>[1] 1.516111</code></pre>
+<pre class="r"><code>exp(0.0157780) # lower CI (as low as 1.5%)</code></pre>
+<pre><code>[1] 1.015903</code></pre>
 <br>
 <p>
 <button type="button" class="btn btn-default btn-workflowr btn-workflowr-sessioninfo" data-toggle="collapse" data-target="#workflowr-sessioninfo" style="display: block;">
@@ -1047,45 +766,43 @@ locale:
 [11] LC_MEASUREMENT=en_US.UTF-8 LC_IDENTIFICATION=C       
 
 attached base packages:
-[1] stats     graphics  grDevices utils     datasets  methods   base     
+[1] parallel  stats     graphics  grDevices utils     datasets  methods  
+[8] base     
 
 other attached packages:
- [1] pbkrtest_0.5.1    broom.mixed_0.2.6 lmerTest_3.1-3    lme4_1.1-27.1    
- [5] Matrix_1.4-0      cowplot_1.1.1     kableExtra_1.3.4  forcats_0.5.1    
- [9] stringr_1.4.0     dplyr_1.0.7       purrr_0.3.4       readr_2.1.1      
-[13] tidyr_1.1.4       tibble_3.1.6      ggplot2_3.3.5     tidyverse_1.3.1  
-[17] workflowr_1.6.2  
+ [1] survival_3.2-13 marked_1.2.6    lme4_1.1-27.1   Matrix_1.4-0   
+ [5] forcats_0.5.1   stringr_1.4.0   dplyr_1.0.7     purrr_0.3.4    
+ [9] readr_2.1.1     tidyr_1.1.4     tibble_3.1.6    ggplot2_3.3.5  
+[13] tidyverse_1.3.1 workflowr_1.6.2
 
 loaded via a namespace (and not attached):
  [1] nlme_3.1-152        fs_1.5.2            bit64_4.0.5        
- [4] lubridate_1.8.0     webshot_0.5.2       httr_1.4.2         
- [7] rprojroot_2.0.2     numDeriv_2016.8-1.1 TMB_1.7.22         
-[10] tools_4.1.2         backports_1.4.1     bslib_0.3.1        
-[13] utf8_1.2.2          R6_2.5.1            DBI_1.1.2          
-[16] colorspace_2.0-2    withr_2.4.3         tidyselect_1.1.1   
-[19] bit_4.0.4           compiler_4.1.2      git2r_0.28.0       
-[22] cli_3.1.0           rvest_1.0.2         xml2_1.3.3         
-[25] labeling_0.4.2      sass_0.4.0          scales_1.1.1       
-[28] systemfonts_1.0.3   digest_0.6.29       minqa_1.2.4        
-[31] rmarkdown_2.11      svglite_1.2.3.2     pkgconfig_2.0.3    
-[34] htmltools_0.5.2     highr_0.9           dbplyr_2.1.1       
-[37] fastmap_1.1.0       rlang_0.4.12        readxl_1.3.1       
-[40] rstudioapi_0.13     farver_2.1.0        jquerylib_0.1.4    
-[43] generics_0.1.1      jsonlite_1.7.2      vroom_1.5.7        
-[46] magrittr_2.0.1      Rcpp_1.0.7          munsell_0.5.0      
-[49] fansi_1.0.0         gdtools_0.2.3       lifecycle_1.0.1    
-[52] stringi_1.7.3       whisker_0.4         yaml_2.2.1         
-[55] MASS_7.3-54         plyr_1.8.6          grid_4.1.2         
-[58] parallel_4.1.2      promises_1.2.0.1    crayon_1.4.2       
-[61] lattice_0.20-45     haven_2.4.3         splines_4.1.2      
-[64] hms_1.1.1           knitr_1.37          pillar_1.6.4       
-[67] boot_1.3-28         reshape2_1.4.4      reprex_2.0.1       
-[70] glue_1.6.0          evaluate_0.14       modelr_0.1.8       
-[73] vctrs_0.3.8         nloptr_1.2.2.3      tzdb_0.2.0         
-[76] httpuv_1.6.5        cellranger_1.1.0    gtable_0.3.0       
-[79] assertthat_0.2.1    xfun_0.29           broom_0.7.11       
-[82] coda_0.19-4         later_1.3.0         viridisLite_0.4.0  
-[85] ellipsis_0.3.2     </code></pre>
+ [4] lubridate_1.8.0     httr_1.4.2          rprojroot_2.0.2    
+ [7] numDeriv_2016.8-1.1 tools_4.1.2         TMB_1.7.22         
+[10] backports_1.4.1     bslib_0.3.1         utf8_1.2.2         
+[13] R6_2.5.1            DBI_1.1.2           colorspace_2.0-2   
+[16] withr_2.4.3         tidyselect_1.1.1    bit_4.0.4          
+[19] compiler_4.1.2      git2r_0.28.0        cli_3.1.0          
+[22] rvest_1.0.2         expm_0.999-6        xml2_1.3.3         
+[25] sass_0.4.0          scales_1.1.1        digest_0.6.29      
+[28] minqa_1.2.4         rmarkdown_2.11      pkgconfig_2.0.3    
+[31] htmltools_0.5.2     dbplyr_2.1.1        fastmap_1.1.0      
+[34] rlang_0.4.12        readxl_1.3.1        rstudioapi_0.13    
+[37] jquerylib_0.1.4     R2admb_0.7.16.2     generics_0.1.1     
+[40] jsonlite_1.7.2      vroom_1.5.7         magrittr_2.0.1     
+[43] Rcpp_1.0.7          munsell_0.5.0       fansi_1.0.0        
+[46] lifecycle_1.0.1     stringi_1.7.3       whisker_0.4        
+[49] yaml_2.2.1          MASS_7.3-54         grid_4.1.2         
+[52] promises_1.2.0.1    crayon_1.4.2        lattice_0.20-45    
+[55] haven_2.4.3         splines_4.1.2       hms_1.1.1          
+[58] knitr_1.37          pillar_1.6.4        boot_1.3-28        
+[61] reprex_2.0.1        glue_1.6.0          evaluate_0.14      
+[64] data.table_1.14.2   modelr_0.1.8        vctrs_0.3.8        
+[67] nloptr_1.2.2.3      tzdb_0.2.0          httpuv_1.6.5       
+[70] cellranger_1.1.0    gtable_0.3.0        assertthat_0.2.1   
+[73] xfun_0.29           broom_0.7.11        coda_0.19-4        
+[76] later_1.3.0         truncnorm_1.0-8     optimx_2021-10.12  
+[79] ellipsis_0.3.2     </code></pre>
 </div>
 </div>
 
