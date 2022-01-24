@@ -288,6 +288,4 @@ plot_fig_S3 <- ggplot(com_surv_adj, aes(x = time+2, y = surv)) +
   scale_x_continuous(name = "Week of experiment", breaks = 2:17)
 x11(); plot_fig_S3
 #ggsave(plot = plot_fig_S3, filename = "figures/aop2-genos-coxadjcurve.pdf", width = 6, height = 5, device=cairo_pdf)
-
-
 ```

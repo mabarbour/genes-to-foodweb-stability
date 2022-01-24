@@ -17,6 +17,7 @@ library(cowplot)
 library(lme4)
 library(lmerTest)
 library(broom.mixed)
+library(pbkrtest)
 
 # set ggplot theme
 theme_set(theme_cowplot())
@@ -59,6 +60,15 @@ log_biomass_lmer <- lmer(log(Biomass_g) ~ temp*(rich + aop2_vs_AOP2 + mam1_vs_MA
 anova(log_biomass_lmer, type = "1", ddf = "Kenward-Roger") %>%
   kable(., caption = "Analysis of variance for plant biomass (log transformed) in the absence of insects.", booktabs = T) %>%
   kable_styling(latex_options = c("striped", "hold_position"))
+
+# omnibus test compared to null (reported in Notes section)
+log_biomass_null <- lmer(log(Biomass_g) ~ 1 + (1|com/temp), data = CageLevelBiomass)
+KRmodcomp(log_biomass_lmer, log_biomass_null)
+
+# omnibust test main vs null
+log_biomass_main <- lmer(log(Biomass_g) ~ temp + rich + aop2_vs_AOP2 + mam1_vs_MAM1 + gsoh_vs_GSOH + (1|com/temp), data = CageLevelBiomass)
+KRmodcomp(log_biomass_main, log_biomass_null)
+KRmodcomp(log_biomass_lmer, log_biomass_main)
 ```
 
 # Reproduce Fig. S10

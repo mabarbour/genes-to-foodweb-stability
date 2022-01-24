@@ -381,7 +381,7 @@ summary(select(timeseries_df, Ptoid_t0, Ptoid_t, Ptoid_t1, Ptoid_t_adj, Ptoid_t1
 # Sava data for structural stability analyses
 
 ```{r}
-# saved on June 9, 2021
+# saved on Sep 20, 2021. Only slight modifications to LP_df, which don't affect any of the structural stability analyses, but only Bayesian R2 and Figs. S6-S7 (and barely at that)
 # save(aphids_only_df, full_df, LP_df, L_df, P_df, file = "output/time-series-data.RData")
 ```
 

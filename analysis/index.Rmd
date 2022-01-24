@@ -12,9 +12,13 @@ editor_options:
 
 ## [Statistical analysis of overall food-web persistence](foodweb-persistence.html)
 
+## [Mark-recapture analysis to distinguish true vs. false extinction events](mark-recapture.html)
+
 ## [Statistical analysis of transitions in food-web structure](foodweb-transitions.html)
 
-## [Bayesian multivariate autoregressive model and structural stability](structural-stability.html)
+## [Prepare time series data from raw data for MAR1 model and structural stability analysis](prep-timeseries.html)
+
+## [Bayesian multivariate autoregressive model (MAR1) and structural stability](structural-stability.html)
 
 ## [Statistical analysis of plant growth in absence of insects](plant-growth-no-insects-lme.html)
 
